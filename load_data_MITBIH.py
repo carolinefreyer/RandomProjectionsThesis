@@ -2,6 +2,7 @@ import wfdb
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 from collections import Counter
+import numpy as np
 
 
 # we only consider two classes: normal and abnormal beats.
@@ -24,6 +25,7 @@ def label_clean_segments(record, annotation, sampfrom):
     heart_beats = []
     heart_beats_x = []
     labels = []
+    labels_plot = []
 
     ann_symbol = annotation.symbol
     ann_sample = annotation.sample
@@ -42,6 +44,10 @@ def label_clean_segments(record, annotation, sampfrom):
             continue
 
         label = classify_beat(ann_symbol[i])
+        if label == 1:
+            label_plot = ann_symbol[i]
+        else:
+            label_plot = ""
 
         if i != len(ann_sample) - 1:
             end = ann_sample[i + 1] - 10
@@ -55,11 +61,12 @@ def label_clean_segments(record, annotation, sampfrom):
             heart_beats.append(beat)
             heart_beats_x.append(beat_x)
             labels.append(label)
+            labels_plot.append(label_plot)
 
         #update start value
         start = end - 1
 
-    return signal_norm, heart_beats, heart_beats_x, labels
+    return signal_norm, heart_beats, heart_beats_x, labels, labels_plot
 
 #Plot using package - high runtime!
 def plot_data_basic(record, annotation):
@@ -68,7 +75,7 @@ def plot_data_basic(record, annotation):
                    figsize=(10, 4), ecg_grids='all', )
 
 #Own plot with anomalies coloured red.
-def plot_data(record, signal_norm, heart_beats, heart_beats_x, labels, sampfrom):
+def plot_data(record, heart_beats_x, labels, labels_plot, sampfrom):
 
     #Colour outlier red, normal beats black
     colours = []
@@ -80,20 +87,24 @@ def plot_data(record, signal_norm, heart_beats, heart_beats_x, labels, sampfrom)
 
     fig, axs = plt.subplots(2)
 
-    x_labels = [i for i in range(sampfrom, signal_norm.shape[0]+sampfrom) if i%(10*record.fs) == 0]
+    x_labels = [i for i in range(sampfrom, record.p_signal.shape[0]+sampfrom) if i%(10*record.fs) == 0]
     x_labels_values = [int(i/record.fs) for i in x_labels]
 
     if sampfrom != 0:
         x_labels = [i-sampfrom for i in x_labels]
 
-    signal1 = [[item[0] for item in heart_beat] for heart_beat in heart_beats]
-    signal2 = [[item[1] for item in heart_beat] for heart_beat in heart_beats]
+    signal1 = [record.p_signal[heart_beat[0]:heart_beat[-1]+1][:,0] for heart_beat in heart_beats_x]
+    signal2 = [record.p_signal[heart_beat[0]:heart_beat[-1]+1][:,1] for heart_beat in heart_beats_x]
 
     fig.suptitle(f"MIT-BIH Arrhythmia Database: Sample {record.record_name}")
 
     for i, c in enumerate(colours):
         axs[0].plot(heart_beats_x[i], signal1[i], color=c)
         axs[1].plot(heart_beats_x[i], signal2[i], color=c)
+        # axs[0].scatter(heart_beats_x[i][0], signal1[i][0], color='b', s=20)
+
+    for i, c in enumerate(colours):
+        axs[0].text(heart_beats_x[i][len(heart_beats_x[i]) // 8], axs[0].get_ylim()[1] + 0.1, str(labels_plot[i]))
 
     axs[0].set(ylabel=record.sig_name[0])
     axs[0].set_xticks(x_labels, x_labels_values)

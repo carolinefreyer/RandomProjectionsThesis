@@ -164,6 +164,8 @@ def show_roc_curve(scores, labels, type, sample, win_length):
     tpr_third_max, fpr_third_max = compute_tpr_fpr(beat_scores_third_max, labels)
     roc_auc_third_max = metrics.auc(fpr_third_max, tpr_third_max)
 
+    get_histo(labels, diff_scores, "Maximum")
+
     plt.title(f'Receiver Operating Characteristic using {type} with window length {win_length} normalised')
     plt.plot(fpr_avg, tpr_avg, 'b', label='(average) AUC = %0.4f' % roc_auc_avg)
     plt.plot(fpr_max, tpr_max, 'k', label='(maximum) AUC = %0.4f' % roc_auc_max)
@@ -191,18 +193,12 @@ def get_histo(labels, scores, summ_method):
         else:
             outlier.append(scores[i])
 
-    fig, ax = plt.subplots(1, 2)
+    bins = 20
 
-    arr_normal = ax[0].hist(normal, bins=20)
-    ax[0].set_title("Normal")
-    ax[0].set(ylabel="Frequency", xlim=[0, 1])
-
-    ax[1].set_title("Outlier")
-    arr_outlier = ax[1].hist(outlier, bins=20)
-    ax[1].set(xlim=[0, 1])
-
-    fig.text(0.5, 0.04, f'Histogram of {summ_method} summarisation method', ha='center')
-
+    plt.hist(normal, bins=bins, density= True, label= "Normal", alpha=0.5)
+    plt.hist(outlier, bins=bins, density= True, label = "Outlier", alpha =0.5)
+    plt.title(f"Overlapping Densities for {summ_method} summarisation method")
+    plt.xlim([0,1])
     plt.show()
 
 
@@ -254,9 +250,9 @@ def auc_for_different_window_length(record, annotation, sampfrom, k, pres_norm):
 
 def run(record, annotation, sampfrom, plot):
 
-    signal_norm, heart_beats, heart_beats_x, labels = load_data_MITBIH.label_clean_segments(record, annotation, sampfrom)
+    signal_norm, heart_beats, heart_beats_x, labels, labels_plot = load_data_MITBIH.label_clean_segments(record, annotation, sampfrom)
     if plot:
-        load_data_MITBIH.plot_data(record, signal_norm, heart_beats, heart_beats_x, labels, sampfrom)
+        load_data_MITBIH.plot_data(record, heart_beats_x, labels, labels_plot, sampfrom)
 
     win_length = 260
     win_length_mean = 260
@@ -274,5 +270,5 @@ def run(record, annotation, sampfrom, plot):
 
     # ROC Curves
     show_roc_curve(beat_outlier_scores, labels, "random projection test", record.record_name, win_length)
-    show_roc_curve(beat_outlier_scores_mean, labels, "Mean test", record.record_name, win_length_mean)
+    # show_roc_curve(beat_outlier_scores_mean, labels, "Mean test", record.record_name, win_length_mean)
 

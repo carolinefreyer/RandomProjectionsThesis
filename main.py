@@ -44,7 +44,7 @@ if __name__ == '__main__':
             samples.append(dir[-3:])
 
     record, annotation = load.load_mit_bih_data(samples[0], sampfrom, sampto)
-    rp.run(record, annotation, sampfrom, True)
+    rp.run(record, annotation, sampfrom, False)
 
     # average_auc_all_samples(samples, sampfrom, sampto)
 
