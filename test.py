@@ -148,13 +148,13 @@ import load_data_NAB as nab
 
 from scipy.io import arff
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-
-# normalise different components of the time series.
-def normalise(signal):
-    # centering and scaling happens independently on each signal
-    scaler = StandardScaler()
-    return scaler.fit_transform(signal)
+# from sklearn.preprocessing import StandardScaler
+#
+# # normalise different components of the time series.
+# def normalise(signal):
+#     # centering and scaling happens independently on each signal
+#     scaler = StandardScaler()
+#     return scaler.fit_transform(signal)
 
 
 # data = arff.loadarff("C:/Users/carol/Downloads/EEG-Eye-State.arff")
@@ -250,6 +250,3 @@ vec1 = np.asarray([1,2,3,4,5,1,2])
 # print(scipy.stats.percentileofscore(vec1))
 # print(new_list)
 
-
-win_length_range = np.unique(np.logspace(0, np.log(400), 50, dtype=int, base=np.e))
-print(win_length_range)
