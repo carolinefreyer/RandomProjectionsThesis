@@ -259,3 +259,124 @@ def auc_k_test():
     # print(predicted_label[137], predicted_label[138], predicted_label[139])
     # print(labels[367], labels[368], labels[369], labels[370])
     # print(predicted_label[367], predicted_label[368], predicted_label[369], predicted_label[370])
+
+
+
+###############################################################NAB Database#############################################
+def make_intervals(length, data, labels, name, plot=False):
+    x = np.array(data['timestamp'])
+    y = np.array(data['value'])
+    y_norm = normalise(np.array(data['value']).reshape(-1, 1))
+
+    if data['timestamp'].iloc[0].day != data['timestamp'].iloc[length-1].day:
+        days = data['timestamp'].dt.date
+        next_day = (data['timestamp'].iloc[0] + timedelta(days=1)).date()
+        start = days[days == next_day].index[0]
+        print("Trimmed beginning: did not start at the beginning of the day.")
+    else:
+        start = 0
+    intervals = []
+    intervals_x = []
+    interval_labels = []
+    y_plot = []
+
+    for i in range((len(data) - start) // length):
+        if ((i+1)*length + 1 > len(data)):
+            break
+        intervals.append(y_norm[start + i * length:start + (i + 1) * length + 1])
+        intervals_x.append(x[start + i * length:start + (i + 1) * length + 1])
+        y_plot.append(y[start + i * length:start + (i + 1) * length + 1])
+        label = 0
+        for j in range(start + i * length, start + (i + 1) * length):
+            if labels[j] == 1:
+                label = 1
+                break
+        interval_labels.append(label)
+    if plot:
+        colours = []
+        for i in interval_labels:
+            if i == 0:
+                colours.append("k")
+            else:
+                colours.append("r")
+
+        for i, c in enumerate(colours):
+            plt.plot(intervals_x[i], y_plot[i], color=c)
+            plt.scatter(intervals_x[i][0], y_plot[i][0], color='b', s=20)
+
+        plt.title(name.replace("_", " ").capitalize())
+        plt.xlabel("Timestamp")
+        plt.show()
+
+    return y_norm, intervals, intervals_x, interval_labels
+
+
+def get_interval_scores(data, data_norm, intervals_x, labels, win_length, win_length_mean, k, pres_norm, mean_comparison, method):
+    expanded_data = []
+    for i in range(len(data_norm)):
+        if win_length == 0:
+            expanded_data.append(data_norm[i])
+            continue
+        if method == 'prev':
+            previous = i - win_length +1
+        else:
+            previous = i - win_length //2
+        future = i+ win_length//2
+        if previous < 0:
+            previous = 0
+        if future > len(data_norm):
+            future = len(data_norm)
+        if method == "prev":
+            expanded_data.append(data_norm[previous:i+1])
+        else:
+            expanded_data.append(data_norm[previous:future])
+    scores = rp.random_projection_new(expanded_data, k, pres_norm)
+    interval_scores = []
+
+    for i,interval in enumerate(intervals_x):
+        index = data.index[data['timestamp'] == interval[0]].tolist()[0]
+        interval_score = [scores[i] for i in range(index,index +len(interval))]
+        interval_scores.append(interval_score)
+
+    if mean_comparison:
+        # window_length for mean might be different to RP method.
+        if win_length != win_length_mean:
+            expanded_data_mean = []
+            for i in range(len(data_norm)):
+                if win_length == 0:
+                    expanded_data.append(data_norm[i])
+                    continue
+                if method == "prev":
+                    previous = i - win_length +1
+                else:
+                    previous = i - win_length//2
+                future = i + win_length //2
+                if previous < 0:
+                    previous = 0
+                if future > len(data_norm):
+                    future = len(data_norm)
+                if method == "prev":
+                    expanded_data_mean.append(data_norm[previous:i+1])
+                else:
+                    expanded_data_mean.append(data_norm[previous:future])
+
+            outlier_scores_means = rp.mean_single_new(expanded_data_mean, data_norm)
+            outlier_scores_means_old = rp.mean_single(expanded_data_mean, k)
+        else:
+            outlier_scores_means = rp.mean_single_new(expanded_data, data_norm)
+            outlier_scores_means_old = rp.mean_single(expanded_data, k)
+
+        interval_outlier_scores_means = []
+        interval_outlier_scores_means_old = []
+
+
+        for interval in intervals_x:
+            index = data.index[data['timestamp'] == interval[0]].tolist()[0]
+            interval_score = [outlier_scores_means[i] for i in range(index, index + len(interval))]
+            interval_outlier_scores_means.append(interval_score)
+            interval_score = [outlier_scores_means_old[i] for i in range(index, index + len(interval))]
+            interval_outlier_scores_means_old.append(interval_score)
+        return interval_scores, labels, interval_outlier_scores_means, interval_outlier_scores_means_old
+    else:
+        return interval_scores, labels, None, None
+
