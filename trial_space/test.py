@@ -5,6 +5,10 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import os
 import seaborn
+import sys
+import argparse
+sys.path.append(os.path.abspath('../'))
+import pprint
 
 import load_data_MITBIH as ld
 import pandas as pd
@@ -234,7 +238,7 @@ import pandas as pd
 # print(data['value'].iloc[812],data['value'].iloc[813])
 # print(data_diff[810], data_diff[811], data_diff[812], data_diff[813], data_diff[814], data_diff[815])
 
-vec1 = np.asarray([1,2,3,4,5,1,2])
+# vec1 = np.asarray([1,2,3,4,5,1,2])
 # fig, ax = plt.subplots(3,1, figsize=(14,5), gridspec_kw={'height_ratios':[2,2,0.25]})
 # ax[0].plot([1,2,3,4,5,1,2])
 # ax[0].set_xlim([0,len(vec1)-1])
@@ -250,3 +254,277 @@ vec1 = np.asarray([1,2,3,4,5,1,2])
 # print(scipy.stats.percentileofscore(vec1))
 # print(new_list)
 
+
+# win_length_range = np.unique(np.logspace(0, np.log(600), 50, dtype=int, base=np.e))
+# print(win_length_range)
+# from numba import jit
+# import numpy as np
+#
+# @jit(nopython=True)
+# def func(x):
+#     score= np.linalg.norm(np.array([x,x]) - np.array([1.0,1.0])) ** 2
+#     return score
+#
+# @jit(nopython=True)
+# def func_1(win_pos, k, win_length, data):
+#     if win_pos == 'mid':
+#         R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length+1))
+#     else:
+#         R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length + 1))
+#     scores = np.array([0 for _ in range(len(data))])
+#     for i in range(len(data)):
+#         x = [i,i]
+#         scores[i] = func(x)
+#     return scores
+#
+#
+# data = np.array([1,1,1,1,1,1,1])
+# func_1('mid',1,2,data)
+# print(data[1])
+# print(data[1:2])
+# import load_data_MITBIH as mb
+# from sklearn.preprocessing import StandardScaler
+#
+# def normalise(signal):
+#     # centering and scaling happens independently on each signal
+#     scaler = StandardScaler()
+#     return scaler.fit_transform(signal)
+#
+#
+# record, annotation = mb.load_mit_bih_data("100", 0, None)
+# signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_q_points_single(record, annotation, 0, None)
+# timestamp = np.array([int(i) for i in range(len(signal_norm))])
+# signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
+# signal = normalise(signal.values)
+# print(signal[1].reshape(1,-1).shape)
+# print(signal[0:4].shape)
+# import random
+# print(np.unique(np.logspace(0, np.log(800), 50, dtype=int, base=np.e)))
+import load_data_MITBIH as mb
+from numba import jit
+
+# @jit(nopython=True)
+# def mean_columns(point):
+#     means = []
+#     for c in range(len(point[0])):
+#         column = point[:, c]
+#         means.append(np.mean(column))
+#
+#     return np.array(means)
+#
+#
+# @jit(nopython=True)
+# def compute_score(signal):
+#     outlier_scores = np.array([0.0 for _ in range(len(signal))])
+#     for i in range(0, len(signal)):
+#         previous = i - 10 // 2
+#         future = i + 10 // 2
+#         if previous < 0:
+#             previous = 0
+#         if future > len(signal) - 1:
+#             future = len(signal) - 1
+#         point = np.concatenate((signal[previous:i], signal[i + 1:future + 1]))
+#         mean = mean_columns(point)
+#         score = np.linalg.norm(signal[i] - mean) ** 2
+#         outlier_scores[i] = score
+#
+#     # normalise
+#     if max(outlier_scores) != 0:
+#         outlier_scores = outlier_scores * (1 / max(outlier_scores))
+#
+#     return outlier_scores
+#
+# record, annotation = mb.load_mit_bih_data("100", 0, 3000)
+# signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_q_points_single(record, annotation, 0, 3000)
+# timestamp = np.array([int(i) for i in range(len(signal_norm))])
+# signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp).values
+# score = compute_score(signal)
+
+import scipy as sc
+import random
+import numpy as np
+import random
+from numba import jit
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+import sklearn.model_selection as sm
+import scipy as sc
+from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor,ThreadPoolExecutor, as_completed
+import argparse
+from itertools import repeat
+from functools import partial
+
+import load_data_NAB as nab
+import plot_curves as pc
+import load_data_MITBIH as mb
+
+
+
+
+@jit(nopython=True)
+def standardise_scores_z_score(scores):
+    return (scores - np.mean(scores))/np.std(scores)
+
+
+def normalise(signal):
+    # centering and scaling happens independently on each signal
+    scaler = StandardScaler()
+    return scaler.fit_transform(signal)
+
+@jit(nopython=True)
+def mean_columns(point):
+    means = []
+    for c in range(len(point[0])):
+        column = point[:, c]
+        means.append(np.mean(column))
+
+    return np.array(means)
+
+
+@jit(nopython=True)
+def mean_prime(signal, norm_power, win_length):
+    outlier_scores = np.array([0.0 for _ in range(len(signal))])
+    for i in range(0, len(signal)):
+        previous = i - win_length // 2
+        future = i + win_length // 2
+        if previous < 0:
+            previous = 0
+        if future > len(signal) - 1:
+            future = len(signal) - 1
+        point = np.concatenate((signal[previous:i], signal[i + 1:future + 1]))
+        print(point)
+        mean = mean_columns(point)
+        score = np.linalg.norm(signal[i] - mean) ** norm_power
+        print(score)
+        outlier_scores[i] = score
+
+    return standardise_scores_z_score(outlier_scores)
+
+
+@jit(nopython=True)
+def random_projection_single(point, k, norm_perservation, norm_power, R):
+    d = R.shape[1]
+    # If window smaller than d
+    if len(point) < d:
+        R_prime = R[:, :len(point)]
+        point_proj = (1 / np.sqrt(d) * R_prime) @ point
+        point_reconstruct = (1 / np.sqrt(d) * R_prime.T) @ point_proj
+    else:
+        point_proj = (1 / np.sqrt(d) * R) @ point
+        point_reconstruct = (1 / np.sqrt(d) * R.T) @ point_proj
+
+    if norm_perservation:
+        point_reconstruct = np.sqrt(d / k) * point_reconstruct
+
+    outlier_score = np.linalg.norm(point - point_reconstruct) ** norm_power
+
+    return outlier_score
+
+
+@jit(nopython=True)
+def random_projection_window(data, k, norm_perservation, win_pos, norm_power, win_length):
+    # Parameters of random projection + window method.
+    if win_pos == 'mid' and win_length != 1:
+        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length+1))
+    else:
+        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length))
+
+    outlier_scores = np.array([0.0 for _ in range(len(data))])
+    for i in range(len(data)):
+        if win_length == 1:
+            point = data[i].reshape(1,-1)
+        else:
+            if win_pos == 'prev':
+                previous = i - win_length + 1
+                future = i
+            elif win_pos == "mid":
+                previous = i - win_length // 2
+                future = i + win_length // 2
+            else:
+                previous = i
+                future = i + win_length - 1
+
+            if previous < 0:
+                previous = 0
+            if future >= len(data):
+                future = len(data) - 1
+
+            point = data[previous:future + 1]
+        print(point)
+        outlier_scores[i] = random_projection_single(point, k, norm_perservation, norm_power, R)
+    return standardise_scores_z_score(outlier_scores)
+
+# data = np.array([1.0,2,3,4,5,6,7,8]).reshape(-1,1)
+# random_projection_window(data, 2,True, '', 2, 3)
+
+def summarise_scores_supervised(all_scores, labels):
+    train_indices = np.array([i for i in range(len(labels))]).reshape(-1, 1)
+    X_train_i, X_test_i, y_train, y_test = sm.train_test_split(train_indices, labels,  test_size = 0.2, stratify=labels)
+
+    scores_binary = np.full(all_scores.shape, 0)
+    for i, scores in enumerate(all_scores):
+        scores_binary[i] = np.array((np.where((scores > 1.96) | (scores <-1.96), 1, 0)))
+
+    scores_train = scores_binary[:, X_train_i].reshape(scores_binary.shape[0],-1)
+    scores_test = scores_binary[:, X_test_i].reshape(scores_binary.shape[0],-1)
+
+    w = np.ones(scores_train.shape[0])
+    weighted_scores_binary_train = np.full(y_train, 0)
+
+    while not np.array_equal(weighted_scores_binary_train, y_train):
+        for i,score in enumerate(weighted_scores_binary_train):
+            if score == 0 and y_train[i] == 1:
+                for j, s in enumerate(scores_train[:,i]):
+                    if s == 1:
+                        w[j] = w[j]*2
+            if score == 1 and y_train[i] == 0:
+                for j,s in enumerate(scores_train[:,i]):
+                    if s == 1:
+                        w[j] = w[j]/2
+        weighted_scores_train = (w.reshape(1, -1) @ scores_train)[0]
+        weighted_scores_binary_train = np.array(np.where(weighted_scores_train > all_scores.shape[0], 1, 0))
+    predict_test = np.array(np.where((w.reshape(1,-1) @ scores_test)[0] > all_scores.shape[0], 1, 0))
+    return predict_test, y_test
+
+
+import sklearn.model_selection as sk
+
+
+def summarise_scores_supervised_scores_corr_m(all_scores, labels):
+    train_indices = np.array([i for i in range(len(labels))]).reshape(-1, 1)
+    X_train_i, X_test_i, y_train, y_test = sk.train_test_split(train_indices, labels, test_size=0.2, stratify=labels)
+
+    scores_train = all_scores[:, X_train_i].reshape(all_scores.shape[0], -1)
+    scores_test = all_scores[:, X_test_i].reshape(all_scores.shape[0], -1)
+
+    del all_scores, train_indices, labels
+
+    w = np.ones(scores_train.shape[0])
+
+    y_train = np.array(y_train)
+
+    corr_old = 0
+    corr_new = 1
+
+    while not np.abs(corr_new - corr_old) < 0.0000001:
+        for m in range(scores_train.shape[0]):
+            if abs(np.corrcoef(scores_train[m], y_train)[0,1]) > 0.55:
+                w[m] = w[m] * 2
+            else:
+                w[m] = w[m] / 2
+
+        weighted_scores_train = (w.reshape(1, -1) @ scores_train)[0]
+        corr_old = corr_new
+        corr_new = np.corrcoef(weighted_scores_train, y_train)[0, 1]
+    predict_test = np.array((w.reshape(1, -1) @ scores_test)[0])
+    flip = False
+
+    if corr_new < 0:
+        flip = True
+    return predict_test, y_test, flip
+
+import scipy.stats as ss
+all_scores = np.array([[-2, 1, 3, 0, 0, 0.5],[0, 1, 0, 0, 0, 0.5], [-4, 2, 5, 2, 2, 3]])
+labels = np.array([1,0,1,0,0,0])
+print(summarise_scores_supervised_scores_corr_m(all_scores, labels))

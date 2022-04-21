@@ -2,20 +2,18 @@ import numpy as np
 import sklearn.metrics as metrics
 import matplotlib.pyplot as plt
 import seaborn
+from numba import jit
 
-from tqdm import tqdm
 
-folder = "ensemble-24-03"
+folder = "auto-explore"
 
 
 def get_histo(labels, scores, guesses_index):
     normal = []
     outlier = []
     guesses = []
-
     for i, v in enumerate(labels):
-
-        if i in guesses_index:
+        if guesses_index is not None and i in guesses_index:
             guesses.append(scores[i])
         elif v == 1:  # outlier
             outlier.append(scores[i])
@@ -83,7 +81,7 @@ def compute_rates(scores, labels, min, max):
 
 
 def plot_pr(name, precision, recall, pr_auc, labels, runs, type):
-    plt.title(f'PR Curve for {name.replace("_", " ").capitalize()}')
+    plt.title(f'PR Curve for {str(name).replace("_", " ").capitalize()}')
     plt.plot(recall, precision, 'b', label='AUC = %0.4f' % pr_auc)
     plt.legend(loc='lower right')
     no_skill = sum(labels) / len(labels)
@@ -97,7 +95,7 @@ def plot_pr(name, precision, recall, pr_auc, labels, runs, type):
 
 
 def plot_roc(name, fpr, tpr, roc_auc, runs, type):
-    plt.title(f'ROC Curve for {name.replace("_", " ").capitalize()}')
+    plt.title(f'ROC Curve for {str(name).replace("_", " ").capitalize()}')
     plt.plot(fpr, tpr, 'b', label='AUC = %0.4f' % roc_auc)
     plt.legend(loc='lower right')
     plt.plot([0, 1], [0, 1], 'r')
@@ -108,16 +106,34 @@ def plot_roc(name, fpr, tpr, roc_auc, runs, type):
     plt.savefig(f"./{folder}/{name}_ROC_{runs}_{type}.png", bbox_inches='tight')
     plt.clf()
 
+def interval_extract(list):
+    length = len(list)
+    i = 0
+    while (i< length):
+        low = list[i]
+        while i <length-1 and list[i]+1 == list[i + 1]:
+            i += 1
+        high = list[i]
+        if (high - low >= 1):
+            yield [low, high]
+        elif (high - low == 1):
+            yield [low, ]
+            yield [high, ]
+        else:
+            yield [low, ]
+        i += 1
 
 def plot_histogram(name, data, scores, labels, guesses, runs, type):
-    # bins = int((max(scores) - min(scores)))
-    guesses_index = data.index[data['timestamp'].isin(guesses)].tolist()
+    data_numbers = data.reset_index()
+    if guesses is not None:
+        guesses_index = data_numbers.index[data.index.isin(guesses)].tolist()
+        normal, outlier, guessed = get_histo(labels, scores, guesses_index)
+        plt.hist(guessed, bins='auto', label="Guessed", alpha=0.5)
+    else:
+        normal, outlier, guessed = get_histo(labels, scores, None)
 
-    normal, outlier, guessed = get_histo(labels, scores, guesses_index)
     plt.hist(normal, bins='auto', label="Normal", alpha=0.5)
-    plt.hist(guessed, bins='auto', label="Guessed", alpha=0.5)
     plt.hist(outlier, bins='auto', label="Outlier", alpha=0.5)
-    print(outlier)
     plt.title(f"Densities of Outlier Scores for Ensembles")
     plt.legend()
 
@@ -126,22 +142,35 @@ def plot_histogram(name, data, scores, labels, guesses, runs, type):
 
 
 def plot_scores(name, data, scores, labels, guesses, to_add_values, runs, type):
-    fig, axs = plt.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]})
-
-    outliers = data.loc[np.where(np.array(labels) > 0), 'timestamp']
-    outliers = [i for i in outliers.values if i not in guesses]
-    outliers_values = data.loc[data['timestamp'].isin(outliers), 'value']
-    guesses_values = [item for sublist in to_add_values for item in sublist]
-
-    axs[0].plot(data['timestamp'], data['value'], 'k')
-    axs[0].scatter(guesses, guesses_values, color='yellow')
-    axs[0].scatter(outliers, outliers_values, color='b', s=10, alpha=0.5)
-    axs[0].set_title(name.replace("_", " ").capitalize())
+    dim = len(data.columns)
+    columns = list(data.columns)
+    height_ratios = [3 for _ in range(dim)]
+    height_ratios.append(1)
+    fig, axs = plt.subplots(dim+1, 1, gridspec_kw={'height_ratios': height_ratios})
+    axs[0].set_title(str(name).replace("_", " ").capitalize())
     axs[0].xaxis.set_visible(False)
 
-    axs[1].plot(range(len(scores)), scores)
-    axs[1].xaxis.set_visible(False)
-    axs[1].set_ylabel("Ensemble")
+    outliers = data.index[np.where(np.array(labels) > 0)].tolist()
+
+    if guesses is not None:
+        outliers = [i for i in outliers if i not in guesses]
+        guesses_values = [[] for _ in range(dim)]
+
+    outliers_values = [[] for _ in range(dim)]
+
+    for d in range(dim):
+        outliers_values[d] = data.loc[data.index.isin(outliers), columns[d]]
+        axs[d].plot(data.index, data[columns[d]], 'k')
+
+        if guesses is not None:
+            guesses_values[d] = [item for sublist in to_add_values[d] for item in sublist]
+            axs[d].scatter(guesses, guesses_values[d], color='yellow')
+
+        axs[d].scatter(outliers, outliers_values[d], color='b', s=10, alpha=0.5)
+
+    axs[dim].plot(range(len(scores)), scores)
+    axs[dim].xaxis.set_visible(False)
+    axs[dim].set_ylabel("Ensemble")
 
     plt.savefig(f"./{folder}/{name}_plot_{runs}_{type}.png", bbox_inches='tight')
     plt.clf()
@@ -151,21 +180,22 @@ def plot_heights(name, data, labels, guesses, to_add_values, runs, type, heights
     fig, axs = plt.subplots(3,1, figsize=(14,5), gridspec_kw={'height_ratios':[2,2,0.25]})
 
     outliers_index = np.where(np.array(labels) > 0)
-    outliers_time = data.loc[np.where(np.array(labels) > 0), 'timestamp']
+    outliers_time = data.index[np.where(np.array(labels) > 0)].tolist()
     outliers_values = [-1 for i, l in enumerate(locations) if i in outliers_index[0]]
 
-    axs[0].set_title(name.replace("_", " ").capitalize())
+    axs[0].set_title(str(name).replace("_", " ").capitalize())
     seaborn.heatmap([heights], fmt='', ax=axs[1], cbar_ax=axs[2],cbar_kws={"orientation": "horizontal"})
     axs[1].set_ylabel("peak heights")
     axs[1].xaxis.set_visible(False)
     axs[0].set_ylabel("peak positions")
-    axs[0].set_xlim([min(data['timestamp']), max(data['timestamp'])])
+    axs[0].set_xlim([min(data.index), max(data.index)])
     axs[0].scatter(outliers_time, outliers_values,color='yellow')
-    axs[0].plot(data['timestamp'], locations, 'k')
+    axs[0].plot(data.index, locations, 'k')
     # axs[1].xaxis.set_visible(False)
 
     plt.savefig(f"./{folder}/{name}_plot_score_peaks_{runs}_{type}.png", bbox_inches='tight')
     plt.clf()
+
 
 def histo_heights_positions(name, labels, heights, locations, runs, type):
     outliers_index = np.where(np.array(labels) > 0)
@@ -188,16 +218,12 @@ def histo_heights_positions(name, labels, heights, locations, runs, type):
     plt.savefig(f"./{folder}/{name}_histo_heights_{runs}_{type}.png", bbox_inches='tight')
     plt.clf()
 
+
 def all_plots(name, data, scores, labels, guesses, to_add_values, heights, locations, runs, type):
-    print("scores")
     plot_scores(name, data, scores, labels, guesses, to_add_values, runs, type)
-    print("histo")
     plot_histogram(name, data, scores, labels, guesses, runs, type)
-    print("tpr, fpr")
     tpr, fpr, precision, roc_auc, pr_auc = compute_rates(scores, labels, min=min(scores), max=max(scores))
-    print("roc")
     plot_roc(name, fpr, tpr, roc_auc, runs, type)
-    print("pr")
     plot_pr(name, precision, tpr, pr_auc, labels, runs, type)
     # plot_heights(name, data, labels, guesses, to_add_values, runs, type, heights, locations)
     # histo_heights_positions(name, labels, heights, locations, runs, type)

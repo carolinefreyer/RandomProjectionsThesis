@@ -380,3 +380,47 @@ def get_interval_scores(data, data_norm, intervals_x, labels, win_length, win_le
     else:
         return interval_scores, labels, None, None
 
+
+##################################### Ensemble ######################################
+def summarise_scores_var(all_scores):
+    final_scores = []
+    for c in range(len(all_scores[0])):
+        scores_per_point = [score[c] for score in all_scores]
+        final_scores.append(np.var(scores_per_point))
+    return final_scores
+
+
+def list_to_percentiles(numbers):
+    pairs = list(zip(numbers, range(len(numbers))))
+    pairs.sort(key=lambda p: p[0])
+    result = [0 for i in range(len(numbers))]
+    for rank in range(len(numbers)):
+        original_index = pairs[rank][1]
+        result[original_index] = rank * 100.0 / (len(numbers)-1)
+    return result
+
+
+def standardise_scores_relative(scores):
+    return list_to_percentiles(scores)
+
+
+def standardise_scores_maxmin(scores):
+    return 1 / (max(scores) - min(scores)) * (np.array(scores) - min(scores))
+
+
+@jit(nopython=True)
+def summarise_scores(all_scores):
+    final_scores = np.array([0.0 for _ in range(len(all_scores[0]))])
+    # heights = []
+    # locations = []
+    for c in range(len(all_scores[0])):
+        # scores_per_point = [score[c] for score in all_scores]
+        scores_per_point = all_scores[:, c]
+        # n, bins, _ = axs[0].hist(scores_per_point, bins='auto', alpha = 0.5)
+        up = np.quantile(scores_per_point, 0.99)
+        low = np.quantile(scores_per_point, 0.01)
+        final_scores[c] = max(up, 1-low)
+        # final_scores.append(max(scores_per_point))
+        # heights.append(max(n))
+        # locations.append(round(bins[np.argmax(n)],2))
+    return final_scores

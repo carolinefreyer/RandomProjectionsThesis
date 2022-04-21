@@ -68,7 +68,7 @@ if __name__ == '__main__':
 
     samples = []
     skip = [102, 104, 107, 108, 109, 111, 118, 124, 203, 207, 212, 214, 217, 231, 232]
-    for root, dirs, files in os.walk("./data/"):
+    for root, dirs, files in os.walk("../../data/"):
         for dir in dirs:
             if int(dir[-3:]) not in skip:
                 record, annotation = load.load_mit_bih_data(dir[-3:], sampfrom, sampto)

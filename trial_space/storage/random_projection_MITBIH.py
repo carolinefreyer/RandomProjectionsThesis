@@ -2,8 +2,6 @@ import load_data_MITBIH
 import numpy as np
 import sklearn.metrics as metrics
 import matplotlib.pyplot as plt
-import heapq
-import time
 
 
 # Computes outlierness score as mean of interval
@@ -236,7 +234,7 @@ def compute_tpr_fpr(scores, labels, min, max):
     # ix = np.argmax(gmeans)
     # print('Best Threshold=%f, G-Mean=%.3f' % (thresholds[ix], gmeans[ix]))
 
-    # For testing for swamping use:
+    # For trial_space for swamping use:
     # predicted_label = np.where(np.array(scores) > thresholds[ix], 1, 0)
     # tpr.reverse()
     # fpr.reverse()
@@ -394,7 +392,7 @@ def run(record, annotation, sampfrom, plot):
 
     # pre = time.time()
     # print("Preprocessing done: ", pre-start)
-    q_points = np.genfromtxt(f'Q_points/{record.record_name}Q.dat', delimiter=',')
+    q_points = np.genfromtxt(f'data/MITBIH/Q_points/{record.record_name}Q.dat', delimiter=',')
     diff = [q_points[i + 1] - q_points[i] for i in range(len(q_points) - 1)]
 
     win_length = int(np.mean(diff)- np.std(diff))
