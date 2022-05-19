@@ -5,7 +5,7 @@ import seaborn
 from numba import jit
 
 
-folder = "auto-explore"
+folder = "final-explore"
 
 
 def get_histo(labels, scores, guesses_index):
@@ -58,7 +58,7 @@ def compute_rates(scores, labels, min, max):
     # G-means calculation
     gmeans = np.sqrt(np.array(tpr) * (1 - np.array(fpr)))
     ix = np.argmax(gmeans)
-    print('ROC: Best Threshold=%f, G-Mean=%.3f' % (thresholds[ix], gmeans[ix]))
+    # print('ROC: Best Threshold=%f, G-Mean=%.3f' % (thresholds[ix], gmeans[ix]))
 
     pr_auc = metrics.auc(tpr, precision)
     print("Precision-recall AUC: ", pr_auc)
@@ -75,7 +75,7 @@ def compute_rates(scores, labels, min, max):
     # print(precision)
     # locate the index of the largest f score
     ifs = np.argmax(np.array(fscore))
-    print('PRC: Best Threshold=%f, F-Score=%.3f' % (thresholds[ifs], fscore[ifs]))
+    # print('PRC: Best Threshold=%f, F-Score=%.3f' % (thresholds[ifs], fscore[ifs]))
 
     return tpr, fpr, precision, roc_auc, pr_auc
 

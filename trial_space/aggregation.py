@@ -4,11 +4,6 @@ import sklearn.model_selection as sk
 
 
 @jit(nopython=True)
-def get_set(scores, indices):
-    return scores[:, indices.reshape(-1,)].reshape(scores.shape[0], -1)
-
-
-@jit(nopython=True)
 def get_weights_corr_m(scores_train, y_train):
     w = np.ones(scores_train.shape[0])
 

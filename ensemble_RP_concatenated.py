@@ -1,6 +1,5 @@
 import numpy as np
 import random
-import os
 from numba import jit
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
@@ -21,7 +20,7 @@ def standardise_scores_rank(scores):
 
 @jit(nopython=True)
 def standardise_scores_z_score(scores):
-    return scores - np.mean(scores) / np.std(scores)
+    return (scores - np.mean(scores)) / np.std(scores)
 
 
 @jit(nopython=True)
@@ -71,17 +70,19 @@ def random_projection_single(point, k, norm_perservation, norm_power, R):
 
     return outlier_score
 
+
 @jit(nopython=True)
-def random_projection_window(data, k, norm_perservation, win_pos, norm_power, win_length):
+def random_projection_window(data, data_diff_right, data_diff_left, k, norm_perservation, win_pos, norm_power, win_length):
     # Parameters of random projection + window method.
     if win_pos == 'mid' and win_length != 1:
-        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length + 1))
+        R = np.random.normal(loc=0.0, scale=1.0, size=(k, 3*(win_length + 1)*data.shape[0]))
     else:
-        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length))
+        R = np.random.normal(loc=0.0, scale=1.0, size=(k, 3*(win_length)*data.shape[0]))
+
     outlier_scores = np.array([0.0 for _ in range(len(data))])
     for i in range(len(data)):
         if win_length == 1:
-            point = data[i].reshape(1, -1)
+            point = data[i]
         else:
             if win_pos == 'prev':
                 previous = i - win_length + 1
@@ -98,7 +99,7 @@ def random_projection_window(data, k, norm_perservation, win_pos, norm_power, wi
             if future >= len(data):
                 future = len(data) - 1
 
-            point = data[previous:future + 1]
+            point = np.transpose(np.concatenate((data[previous:future + 1], data_diff_right[previous:future + 1], data_diff_left[previous:future + 1]))).flatten()
 
         outlier_scores[i] = random_projection_single(point, k, norm_perservation, norm_power, R)
     return outlier_scores
@@ -111,7 +112,9 @@ def random_projection_window_auto(data, k, norm_perservation, win_pos, norm_powe
         R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length + 1))
     else:
         R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length))
+
     outlier_scores = np.array([0.0 for _ in range(len(data))])
+
     for i in range(len(data)):
         if win_length == 1:
             point = data[i].reshape(1, -1)
@@ -146,7 +149,7 @@ def normalise(signal):
 
 # Parallel tasks
 def task(win_length_max, signal, signal_diff_right, signal_diff_left, signal_auto, i):
-    mode = random.choice([1, 2, 3])
+    mode = random.choice([1, 2])
     norm_perservation = random.choice([True, False])
     win_pos = random.choice(['mid'])
     norm_power = random.choice([1, 1.5, 2, 3])
@@ -159,31 +162,31 @@ def task(win_length_max, signal, signal_diff_right, signal_diff_left, signal_aut
     elif mode == 2:  # normal RP
         win_length = random.choice(window_length_range)
         k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
-        scores = random_projection_window(signal, k, norm_perservation, win_pos,
+        scores = random_projection_window(signal, signal_diff_right, signal_diff_left, k, norm_perservation, win_pos,
                                           norm_power, win_length)
-    elif mode == 3:  # RP on differenced signal
-        direction = random.choice(["left", "right"])
-        win_length = random.choice(window_length_range)
-        k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
-        if direction == "right":
-            scores = random_projection_window(signal_diff_right, k, norm_perservation, win_pos,
-                                              norm_power, win_length)
-        else:
-            scores = random_projection_window(signal_diff_left, k, norm_perservation, win_pos,
-                                              norm_power, win_length)
-    else:  # autocorrelation
-        win_length = random.choice(window_length_range[window_length_range > len(signal) * 0.00002])
-        k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
-        scores = random_projection_window_auto(signal, k, norm_perservation, win_pos, norm_power, win_length)
+    # elif mode == 3:  # RP on differenced signal
+    #     direction = random.choice(["left", "right"])
+    #     win_length = random.choice(window_length_range)
+    #     k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
+    #     if direction == "right":
+    #         scores = random_projection_window(signal_diff_right, k, norm_perservation, win_pos,
+    #                                           norm_power, win_length)
+    #     else:
+    #         scores = random_projection_window(signal_diff_left, k, norm_perservation, win_pos,
+    #                                           norm_power, win_length)
+    # else:  # autocorrelation
+    #     win_length = random.choice(window_length_range[window_length_range > len(signal) * 0.00002])
+    #     k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
+    #     scores = random_projection_window_auto(signal, k, norm_perservation, win_pos, norm_power, win_length)
 
-    return standardise_scores_z_score(scores)
+    return standardise_scores_rank(scores)
 
 
 @jit(nopython=True)
 def get_bin_sets(all_scores, indices_train, indices_test):
     scores_binary = np.full(all_scores.shape, 0.0)
     for i, scores in enumerate(all_scores):
-        scores_binary[i] = np.where((scores > 1.96) | (scores < -1.96), 1.0, 0.0)
+        scores_binary[i] = np.where((scores > 0.99) | (scores < 0.01), 1.0, 0.0)
     train = scores_binary[:, indices_train.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
     test = scores_binary[:, indices_test.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
     return train, test
@@ -218,7 +221,7 @@ def get_weights(scores_train, y_train):
 
 def summarise_scores_supervised(all_scores, labels):
     train_indices = np.array([i for i in range(len(labels))]).reshape(-1, 1)
-    X_train_i, X_test_i, y_train, y_test = sk.train_test_split(train_indices, labels, test_size=0.5, stratify=labels)
+    X_train_i, X_test_i, y_train, y_test = sk.train_test_split(train_indices, labels, test_size=0.2, stratify=labels)
 
     scores_train, scores_test = get_bin_sets(all_scores, X_train_i, X_test_i)
     del all_scores, train_indices, labels
@@ -269,7 +272,7 @@ def get_signals(data):
 
 
 # m = number of components
-def run(data, win_length_max, n_runs, parallelise, num_workers):
+def run(data, labels, win_length_max, n_runs, parallelise, num_workers):
     outlier_scores_m = []
 
     signal, signal_diff_right, signal_diff_left, signal_auto = get_signals(data)
@@ -285,15 +288,8 @@ def run(data, win_length_max, n_runs, parallelise, num_workers):
         for i in tqdm(range(n_runs)):
             outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, signal_auto, i))
     print("Summarising...")
-    if len(data) > 10000:
-        name = 'scores'
-        c = 0
-        while os.path.exists(f'C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/{name}.npy'):
-            c+=1
-            name = f'scores({c})'
-        np.save(f"C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/{name}", outlier_scores_m)
-
-    return np.array(outlier_scores_m)
+    # np.save(f"./output_scores/MITBIH_sample_101_1000_ranked", outlier_scores_m)
+    return summarise_scores_supervised(np.array(outlier_scores_m), labels)
 
 
 def summarise_data(data, labels, guesses):
@@ -314,8 +310,7 @@ def run_NAB(n_runs, max_window_size, type, parallelise=False, num_workers=6):
     data.index = pd.to_datetime(data.index)
 
     summarise_data(data, labels, guesses)
-    all_scores = run(data, max_window_size, n_runs, parallelise, num_workers)
-    scores_test, y_test = summarise_scores_supervised(all_scores, labels)
+    scores_test, y_test = run(data, labels, max_window_size, n_runs, parallelise, num_workers)
     print(scores_test[810], scores_test[811], scores_test[812], scores_test[813], scores_test[814], scores_test[815],
           scores_test[816])
     diff = len(np.where(scores_test - y_test != 0)[0])
@@ -339,8 +334,7 @@ def run_MITBIH(sample, n_runs, max_window_size, type, parallelise=False, num_wor
     # print("Plotting...")
 
     # pc.all_plots(f"sample_{sample}", signal, scores, labels, None, None, None, None, runs=n_runs, type=type)
-    all_scores = run(signal, max_window_size, n_runs, parallelise, num_workers)
-    scores_test, y_test = summarise_scores_supervised(all_scores, labels)
+    scores_test, y_test = run(signal, labels, max_window_size, n_runs, parallelise, num_workers)
     diff = len(np.where(scores_test - y_test != 0)[0])
     print(diff, diff / len(y_test))
     # np.save(f"./output_scores/MITBIH_sample_{sample}_{n_runs}_{type}", scores_test)

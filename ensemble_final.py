@@ -4,7 +4,6 @@ import os
 from numba import jit
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-import statsmodels.tsa.stattools as sm
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 import argparse
@@ -19,9 +18,10 @@ import scipy.stats as ss
 def standardise_scores_rank(scores):
     return ss.rankdata(scores, method='max')/(len(scores))
 
+
 @jit(nopython=True)
 def standardise_scores_z_score(scores):
-    return scores - np.mean(scores) / np.std(scores)
+    return (scores - np.mean(scores)) / np.std(scores)
 
 
 @jit(nopython=True)
@@ -35,16 +35,35 @@ def mean_columns(point):
 
 
 @jit(nopython=True)
-def mean_prime(signal, norm_power, win_length):
+def mean_prime(signal, win_pos, norm_power, win_length):
     outlier_scores = np.array([0.0 for _ in range(len(signal))])
     for i in range(0, len(signal)):
-        previous = i - win_length // 2
-        future = i + win_length // 2
+        if win_pos == 'prev':
+            if i == 0:
+                continue
+            previous = i - win_length + 1
+            future = i
+        elif win_pos == "mid":
+            previous = i - win_length // 2
+            future = i + win_length // 2
+        else:
+            if i == len(signal) -1:
+                continue
+            previous = i
+            future = i + win_length - 1
+
         if previous < 0:
             previous = 0
         if future > len(signal) - 1:
             future = len(signal) - 1
-        point = np.concatenate((signal[previous:i], signal[i + 1:future + 1]))
+
+        if win_pos == 'prev':
+            point = signal[previous:i]
+        elif win_pos == "mid":
+            point = np.concatenate((signal[previous:i], signal[i + 1:future + 1]))
+        else:
+            point = signal[i+1:future+1]
+
         mean = mean_columns(point)
         score = np.linalg.norm(signal[i] - mean) ** norm_power
         outlier_scores[i] = score
@@ -70,6 +89,7 @@ def random_projection_single(point, k, norm_perservation, norm_power, R):
     outlier_score = np.linalg.norm(point - point_reconstruct) ** norm_power
 
     return outlier_score
+
 
 @jit(nopython=True)
 def random_projection_window(data, k, norm_perservation, win_pos, norm_power, win_length):
@@ -104,40 +124,6 @@ def random_projection_window(data, k, norm_perservation, win_pos, norm_power, wi
     return outlier_scores
 
 
-# @jit(nopython=True)
-def random_projection_window_auto(data, k, norm_perservation, win_pos, norm_power, win_length):
-    # Parameters of random projection + window method.
-    if win_pos == 'mid' and win_length != 1:
-        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length + 1))
-    else:
-        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length))
-    outlier_scores = np.array([0.0 for _ in range(len(data))])
-    for i in range(len(data)):
-        if win_length == 1:
-            point = data[i].reshape(1, -1)
-        else:
-            if win_pos == 'prev':
-                previous = i - win_length + 1
-                future = i
-            elif win_pos == "mid":
-                previous = i - win_length // 2
-                future = i + win_length // 2
-            else:
-                previous = i
-                future = i + win_length - 1
-
-            if previous < 0:
-                previous = 0
-            if future >= len(data):
-                future = len(data) - 1
-
-            point = data[previous:future + 1]
-            point = autocorrelation_sm(point)
-
-        outlier_scores[i] = random_projection_single(point, k, norm_perservation, norm_power, R)
-    return outlier_scores
-
-
 def normalise(signal):
     # centering and scaling happens independently on each signal
     scaler = StandardScaler()
@@ -145,23 +131,23 @@ def normalise(signal):
 
 
 # Parallel tasks
-def task(win_length_max, signal, signal_diff_right, signal_diff_left, signal_auto, i):
+def task(win_length_max, signal, signal_diff_right, signal_diff_left, i):
     mode = random.choice([1, 2, 3])
     norm_perservation = random.choice([True, False])
-    win_pos = random.choice(['mid'])
+    win_pos = random.choice(['prev', 'mid', 'future'])
     norm_power = random.choice([1, 1.5, 2, 3])
     window_length_range = np.unique(np.logspace(0, np.log(win_length_max), 50, dtype=int, base=np.e, endpoint=True))
-    k_range = np.array([1, 2, 3, 4, 5, 10])
+    k_range = np.array([1,3,10])
 
     if mode == 1:  # mu
         win_length = random.choice(window_length_range[window_length_range > 1])
-        scores = mean_prime(signal, norm_power, win_length)
+        scores = mean_prime(signal, win_pos, norm_power, win_length)
     elif mode == 2:  # normal RP
         win_length = random.choice(window_length_range)
         k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
         scores = random_projection_window(signal, k, norm_perservation, win_pos,
                                           norm_power, win_length)
-    elif mode == 3:  # RP on differenced signal
+    else:  # RP on differenced signal
         direction = random.choice(["left", "right"])
         win_length = random.choice(window_length_range)
         k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
@@ -171,10 +157,6 @@ def task(win_length_max, signal, signal_diff_right, signal_diff_left, signal_aut
         else:
             scores = random_projection_window(signal_diff_left, k, norm_perservation, win_pos,
                                               norm_power, win_length)
-    else:  # autocorrelation
-        win_length = random.choice(window_length_range[window_length_range > len(signal) * 0.00002])
-        k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
-        scores = random_projection_window_auto(signal, k, norm_perservation, win_pos, norm_power, win_length)
 
     return standardise_scores_z_score(scores)
 
@@ -224,7 +206,8 @@ def summarise_scores_supervised(all_scores, labels):
     del all_scores, train_indices, labels
     w = get_weights(scores_train, np.array(y_train))
     predict_test = np.array(np.where((w.reshape(1, -1) @ scores_test)[0] > scores_train.shape[0], 1, 0))
-    return predict_test, y_test
+    return (w.reshape(1, -1) @ scores_test)[0], y_test
+
 
 @jit(nopython=True)
 def summarise_scores(all_scores):
@@ -237,25 +220,6 @@ def summarise_scores(all_scores):
     return final_scores
 
 
-def autocorrelation_sm(data):
-    auto_coefficients = np.full(data.shape, 0.0)
-    for c in range(data.shape[1]):
-        auto_coefficients[:, c] = sm.acf(data[:, c], nlags=len(data))
-    return auto_coefficients
-
-
-@jit(nopython=True)
-def autocorrelation(data):
-    mean = mean_columns(data)
-    auto_coefficients = np.full(data.shape, 0.0)
-    for i, point in enumerate(data):
-        sum = np.full(point.shape, 0.0)
-        for t in range(i, len(data)):
-            sum = sum + ((data[t] - mean) * (data[t - i] - mean))[0]
-        auto_coefficients[i] = point.shape[0] * sum / np.sum((data - mean) ** 2)
-    return auto_coefficients
-
-
 # labels = df_train['Normal/Attack'].to_numpy().astype('int')
 def get_signals(data):
     signal = normalise(data.values)
@@ -263,27 +227,26 @@ def get_signals(data):
     signal_diff_right = np.array([np.abs(i) for i in signal_diff_right])
     signal_diff_left = normalise(data.diff(-1).fillna(0).values)
     signal_diff_left = np.array([np.abs(i) for i in signal_diff_left])
-    signal_auto = autocorrelation_sm(signal)
 
-    return signal, signal_diff_right, signal_diff_left, signal_auto
+    return signal, signal_diff_right, signal_diff_left
 
 
 # m = number of components
 def run(data, win_length_max, n_runs, parallelise, num_workers):
     outlier_scores_m = []
 
-    signal, signal_diff_right, signal_diff_left, signal_auto = get_signals(data)
+    signal, signal_diff_right, signal_diff_left = get_signals(data)
 
     if parallelise:
         with ProcessPoolExecutor(num_workers) as executor:
             for r in tqdm(
-                    [executor.submit(task, win_length_max, signal, signal_diff_right, signal_diff_left, signal_auto, i)
+                    [executor.submit(task, win_length_max, signal, signal_diff_right, signal_diff_left, i)
                      for i in
                      range(n_runs)]):
                 outlier_scores_m.append(r.result())
     else:
         for i in tqdm(range(n_runs)):
-            outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, signal_auto, i))
+            outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, i))
     print("Summarising...")
     if len(data) > 10000:
         name = 'scores'
@@ -315,12 +278,14 @@ def run_NAB(n_runs, max_window_size, type, parallelise=False, num_workers=6):
 
     summarise_data(data, labels, guesses)
     all_scores = run(data, max_window_size, n_runs, parallelise, num_workers)
-    scores_test, y_test = summarise_scores_supervised(all_scores, labels)
+    # scores_test, y_test = summarise_scores_supervised(all_scores, labels)
+    scores_test = summarise_scores(all_scores)
     print(scores_test[810], scores_test[811], scores_test[812], scores_test[813], scores_test[814], scores_test[815],
           scores_test[816])
-    diff = len(np.where(scores_test - y_test != 0)[0])
-    print(diff, diff/len(y_test))
-    np.save(f"./output_scores/NAB_{name}_{n_runs}_{type}", scores_test)
+    pc.compute_rates(scores_test, labels, min(scores_test), max(scores_test))
+    # diff = len(np.where(scores_test - y_test != 0)[0])
+    # print(diff, diff/len(y_test))
+    # np.save(f"./output_scores/NAB_{name}_{n_runs}_{type}", scores_test)
     # pc.all_plots(name, data, scores_test, y_test, None, None, None, None, runs=n_runs, type=type)
 
 
@@ -354,7 +319,7 @@ if __name__ == '__main__':
                         help='Which dataset to run: ["NAB","MITBIH"]')
     parser.add_argument('--n_runs', type=int, default=1000,
                         help='Number of iterations')
-    parser.add_argument('--max_window_size', type=int, default=100,
+    parser.add_argument('--max_window_length', type=int, default=100,
                         help='Maximum window size')
     parser.add_argument('--type', type=str, default="testing",
                         help='Test ID')
@@ -373,8 +338,8 @@ if __name__ == '__main__':
     print("Ran with parameters:", str_print)
 
     if args.dataset == "NAB":
-        run_NAB(n_runs=args.n_runs, max_window_size=args.max_window_size, type=args.type, parallelise=args.parallelise,
+        run_NAB(n_runs=args.n_runs, max_window_size=args.max_window_length, type=args.type, parallelise=args.parallelise,
                 num_workers=args.num_workers)
     elif args.dataset == "MITBIH":
-        run_MITBIH(sample=args.sample, n_runs=args.n_runs, max_window_size=args.max_window_size, type=args.type,
+        run_MITBIH(sample=args.sample, n_runs=args.n_runs, max_window_size=args.max_window_length, type=args.type,
                    parallelise=args.parallelise, num_workers=args.num_workers)
