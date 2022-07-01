@@ -1,9 +1,9 @@
 *.png
 */**/*.png
 data/
-.idea/
 trial_space/
 old_files/
+.idea/
 
 ### Python template
 # Byte-compiled / optimized / DLL files
