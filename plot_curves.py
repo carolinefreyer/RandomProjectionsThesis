@@ -30,12 +30,11 @@ def compute_rates(scores, labels, min, max):
 
     labels = np.array(labels)
     step = (max - min) / 100
-    thresholds = np.arange(min, max, step).tolist()
+    thresholds = np.arange(min-step, max+step, step).tolist()
     for threshold in thresholds:
         predicted_label = np.where(np.array(scores) > threshold, 1, 0)
 
         TN, FP, FN, TP = metrics.confusion_matrix(labels, predicted_label, labels=[0, 1]).ravel()
-
         # All data points are labelled normal (very low threshold used.)
         if TP + FP == 0:
             print("TP and FP are zero (All points labelled normal).")
@@ -45,6 +44,7 @@ def compute_rates(scores, labels, min, max):
         # No outliers in dataset.
         if TP + FN == 0:
             print("Error: TP and FN are zero (No outliers in dataset).")
+
         else:
             tpr.append(TP / (TP + FN))
         # No normal points in dataset.
@@ -136,7 +136,7 @@ def plot_histogram(name, data, scores, labels, guesses, runs, type):
     plt.hist(outlier, bins='auto', label="Outlier", alpha=0.5)
     plt.title(f"Densities of Outlier Scores for Ensembles")
     plt.legend()
-
+    plt.show()
     plt.savefig(f"./{folder}/{name}_histogram_{runs}_{type}.png", bbox_inches='tight')
     plt.clf()
 

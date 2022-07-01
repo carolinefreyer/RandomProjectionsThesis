@@ -1,10 +1,12 @@
 import numpy as np
 import pandas as pd
 import argparse
+import matplotlib.pyplot as plt
 from numba import jit
 
 import load_data_MITBIH as mb
-import ensemble_less_mem as e
+import ensemble_WINNOW_testing as e
+import plot_curves as pc
 
 
 def convert(heart_beats_x):
@@ -24,6 +26,49 @@ def get_beat_score(all_scores, heart_beats_x):
     return all_scores_beats
 
 
+def plot():
+    fig, axs = plt.subplots(4, 1, gridspec_kw={'height_ratios': [3, 3, 1, 1]})
+
+    colours = []
+    for i in labels[:25]:
+        if i == 0:
+            colours.append("k")
+        else:
+            colours.append("r")
+
+    x_labels = [i for i in range(sampfrom, heart_beats_x[24][-1] + sampfrom) if i % (10 * record.fs) == 0]
+    x_labels_values = [int(i / record.fs) for i in x_labels]
+
+    if sampfrom != 0:
+        x_labels = [i - sampfrom for i in x_labels]
+    signal = record.p_signal
+    signal1 = [signal[heart_beat[0]:heart_beat[-1] + 1][:, 0] for heart_beat in heart_beats_x[:25]]
+    signal2 = [signal[heart_beat[0]:heart_beat[-1] + 1][:, 1] for heart_beat in heart_beats_x[:25]]
+
+    fig.suptitle(f"MIT-BIH Arrhythmia Database: Sample {record.record_name}")
+
+    for i, c in enumerate(colours):
+        axs[0].plot(heart_beats_x[i], signal1[i], color=c)
+        axs[1].plot(heart_beats_x[i], signal2[i], color=c)
+
+    axs[0].set_ylabel(record.sig_name[0])
+    axs[0].set_xticks(x_labels, x_labels_values)
+    axs[1].set_ylabel(record.sig_name[1])
+    axs[1].set_xticks(x_labels, x_labels_values)
+    # axs[2].set_xlabel("time (seconds)")
+
+    a = heart_beats_x[0][0]
+    b = heart_beats_x[24][-1]
+    axs[2].plot(range(a, b), scores_test[a:b].reshape(-1, ))
+    axs[2].xaxis.set_visible(False)
+    axs[2].set_ylabel("Individual \n scores")
+    bar_pos = [heart_beat[len(heart_beat) // 2] for heart_beat in heart_beats_x[:25]]
+    axs[3].bar(bar_pos, scores_test_beat[:25].reshape(-1, ), width=200)
+    axs[3].xaxis.set_visible(False)
+    axs[3].set_ylabel("Beat \n scores")
+    plt.show()
+
+
 def summarisation(sample, max_window_size, n_runs, parallelise, num_workers):
     sampfrom = 0
     sampto = None
@@ -34,16 +79,20 @@ def summarisation(sample, max_window_size, n_runs, parallelise, num_workers):
     signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
     e.summarise_data(heart_beats, labels, [])
     # all_scores = e.run(signal, max_window_size, n_runs, parallelise, num_workers)
-    all_scores = np.load("./output_scores_MITBIH/scores_sample100_400_1000.npy")
+    all_scores = np.load("./output_scores_MITBIH/scores_final_unstandardised_123_0.npy")
+    print(all_scores.shape)
     all_scores_beat = get_beat_score(all_scores, convert(heart_beats_x))
-    print("got scores")
-    scores_test, y_test = e.summarise_scores_supervised(all_scores_beat, labels)
-    print(np.bincount(scores_test))
-    diff = len(np.where(scores_test - y_test != 0)[0])
-    print(diff, diff/len(labels))
-
-
-
+    # print("got scores")
+    # for p in [0, 0.2, 0.4, 0.6, 0.8]:
+    #     np.random.seed(0)
+    sample_size = int(0.8 * len(labels))
+    kept_true_labels = np.random.choice(range(len(labels)), sample_size, replace=False)
+    semi_supervised_labels = [labels[i] if i in kept_true_labels else 0 for i in range(len(labels))]
+    print(np.bincount(semi_supervised_labels))
+    print(e.summarise_scores_semi_supervised_cross_val(all_scores_beat, np.array(labels),
+                                                semi_labels=np.array(semi_supervised_labels)))
+    # print(e.summarise_scores_supervised_cross_val(all_scores_beat, np.array(labels), semi_labels=np.array(labels)))
+    # pc.all_plots(f"sample_{sample}", signal, scores_test, y_test, None, None, None, None, runs=n_runs, type=type)
 
 if __name__ == '__main__':
 

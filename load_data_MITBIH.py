@@ -213,12 +213,13 @@ def plot_data(record, heart_beats_x, labels, sampfrom):
     colours = []
     for i in labels[:25]:
         if i == 0:
-            colours.append("k")
+            colours.append("w")
         else:
             colours.append("r")
 
-    fig, axs = plt.subplots(2)
-
+    # fig, axs = plt.subplots(2)
+    ax = plt.axes()
+    ax.set_facecolor("k")
     x_labels = [i for i in range(sampfrom, heart_beats_x[24][-1] + sampfrom) if i % (10 * record.fs) == 0]
     x_labels_values = [int(i / record.fs) for i in x_labels]
 
@@ -228,6 +229,43 @@ def plot_data(record, heart_beats_x, labels, sampfrom):
     signal1 = [signal[heart_beat[0]:heart_beat[-1] + 1][:, 0] for heart_beat in heart_beats_x[:25]]
     signal2 = [signal[heart_beat[0]:heart_beat[-1] + 1][:, 1] for heart_beat in heart_beats_x[:25]]
 
+    plt.title(f"MIT-BIH Arrhythmia Database: Sample {record.record_name}")
+
+    for i, c in enumerate(colours):
+        plt.plot(heart_beats_x[i], signal1[i], color=c)
+        # axs[1].plot(heart_beats_x[i], signal2[i], color=c)
+
+        # axs[0].scatter(heart_beats_x[i][0], signal1[i][0], color='b', s=20)
+    # axs[0].set_ylabel(record.sig_name[0])
+    # axs[0].set_xticks(x_labels,x_labels_values)
+    # axs[1].set_ylabel(record.sig_name[1])
+    # axs[1].set_xticks(x_labels,x_labels_values)
+    # axs[1].set_xlabel("time (seconds)")
+    # # for i, c in enumerate(colours):
+    #     axs[0].text(heart_beats_x[i][len(heart_beats_x[i]) // 8], axs[0].get_ylim()[1] + 0.1, str(labels_plot[i]))
+
+    plt.show()
+
+def plot_all_data(record, heart_beats_x, labels, sampfrom):
+    # Colour outlier red, normal beats black
+    colours = []
+    for i in labels:
+        if i == 0:
+            colours.append("k")
+        else:
+            colours.append("r")
+
+    fig, axs = plt.subplots(2)
+
+    # x_labels = [i for i in range(sampfrom, heart_beats_x[24][-1] + sampfrom) if i % (10 * record.fs) == 0]
+    # x_labels_values = [int(i / record.fs) for i in x_labels]
+
+    # if sampfrom != 0:
+    #     x_labels = [i - sampfrom for i in x_labels]
+    signal = record.p_signal
+    signal1 = [signal[heart_beat[0]:heart_beat[-1] + 1][:, 0] for heart_beat in heart_beats_x]
+    signal2 = [signal[heart_beat[0]:heart_beat[-1] + 1][:, 1] for heart_beat in heart_beats_x]
+
     fig.suptitle(f"MIT-BIH Arrhythmia Database: Sample {record.record_name}")
 
     for i, c in enumerate(colours):
@@ -236,9 +274,9 @@ def plot_data(record, heart_beats_x, labels, sampfrom):
 
         # axs[0].scatter(heart_beats_x[i][0], signal1[i][0], color='b', s=20)
     axs[0].set_ylabel(record.sig_name[0])
-    axs[0].set_xticks(x_labels,x_labels_values)
+    # axs[0].set_xticks(x_labels,x_labels_values)
     axs[1].set_ylabel(record.sig_name[1])
-    axs[1].set_xticks(x_labels,x_labels_values)
+    # axs[1].set_xticks(x_labels,x_labels_values)
     axs[1].set_xlabel("time (seconds)")
     # for i, c in enumerate(colours):
     #     axs[0].text(heart_beats_x[i][len(heart_beats_x[i]) // 8], axs[0].get_ylim()[1] + 0.1, str(labels_plot[i]))
@@ -262,4 +300,8 @@ def load_mit_bih_data(name, sampfrom, sampto):
     annotation_basic = wfdb.rdann(f'C:/Users/carol/PycharmProjects/RandomProjectionsThesis/data/MITBIH/sample_{name}/{name}', 'atr', sampfrom=sampfrom, sampto=length,
                                   shift_samps=True)
 
+
+    signal_norm, heart_beats, heart_beats_x, labels = label_clean_segments_q_points(record, annotation, sampfrom)
+    # timestamp = np.array([int(i) for i in range(len(signal_norm))])
+    # signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
     return record, annotation

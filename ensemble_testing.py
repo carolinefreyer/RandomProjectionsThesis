@@ -189,11 +189,11 @@ def get_bin_sets_ranked(all_scores, indices_train, indices_test):
 
 
 @jit(nopython=True)
-def get_weights(scores_train, y_train):
+def get_weights(scores_train, y_train, v):
     w = np.ones(scores_train.shape[0])
     weighted_scores_binary_train = np.full((len(y_train),), 0)
     c = 0
-    step_size = (sum(y_train)/len(y_train))/10
+    step_size = (sum(y_train)/len(y_train))/v
     threshold = 0.0
     errors = np.where(weighted_scores_binary_train - y_train != 0)[0]
     while (len(errors) / len(y_train) > threshold) or (c < np.log2(scores_train.shape[0])):
@@ -225,7 +225,7 @@ def get_weights(scores_train, y_train):
     return w
 
 
-def summarise_scores_supervised(all_scores, labels, test_size, type):
+def summarise_scores_supervised(all_scores, labels, test_size, type, v):
     train_indices = np.array([i for i in range(len(labels))]).reshape(-1, 1)
     X_train_i, X_test_i, y_train, y_test = sk.train_test_split(train_indices, labels, test_size=test_size, stratify=labels, random_state=42)
     if type == "rank":
@@ -233,7 +233,7 @@ def summarise_scores_supervised(all_scores, labels, test_size, type):
     else:
         scores_train, scores_test = get_bin_sets(all_scores, X_train_i, X_test_i)
     del all_scores, train_indices, labels
-    w = get_weights(scores_train, np.array(y_train))
+    w = get_weights(scores_train, np.array(y_train), v)
     np.save("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/weights/weights", np.array(w))
     predict_test = np.array(np.where((w.reshape(1, -1) @ scores_test)[0] > scores_train.shape[0], 1, 0))
     return (w.reshape(1, -1) @ scores_test)[0], y_test, predict_test
@@ -281,7 +281,7 @@ def run(data, win_length_max, n_runs, parallelise, num_workers, type ="z"):
             outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, type, i))
     print("Summarising...")
     if len(data) > 10000:
-        name = 'scores'
+        name = 'scores_f'
         c = 0
         while os.path.exists(f'C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/{name}.npy'):
             c+=1
@@ -319,16 +319,22 @@ def run_NAB(n_runs, max_window_size, type, parallelise=False, num_workers=6):
     type = "z"
     summarise_data(data, labels, guesses)
     all_scores = run(data, max_window_size, n_runs, parallelise, num_workers, type)
-    scores_test, y_test, bin_test = summarise_scores_supervised(all_scores, labels, test_size=0.2, type= type)
 
-    print(scores_test[810], scores_test[811], scores_test[812], scores_test[813], scores_test[814], scores_test[815],
-          scores_test[816])
-
+    scores_test, y_test, bin_test = summarise_scores_supervised(all_scores, labels, test_size=0.2, type=type, v=10)
     print(np.bincount(bin_test))
-    tpr, fpr, precision, roc_auc, pr_auc= pc.compute_rates(scores_test, y_test, min(scores_test), max(scores_test))
-    plt.plot(fpr, tpr)
+    tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(scores_test, y_test, min(scores_test), max(scores_test))
     diff = len(np.where(bin_test - y_test != 0)[0])
     print(diff, diff / len(labels))
+    scores_test, y_test, bin_test = summarise_scores_supervised(all_scores, labels, test_size=0.2, type="rank", v=10)
+    print(np.bincount(bin_test))
+    tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(scores_test, y_test, min(scores_test), max(scores_test))
+    diff = len(np.where(bin_test - y_test != 0)[0])
+    print(diff, diff / len(labels))
+
+    # print(scores_test[810], scores_test[811], scores_test[812], scores_test[813], scores_test[814], scores_test[815],
+    #       scores_test[816])
+
+
     # np.save(f"./output_scores/NAB_{name}_{n_runs}_{type}", scores_test)
     # pc.all_plots(name, data, scores_test, y_test, None, None, None, None, runs=n_runs, type=type)
 

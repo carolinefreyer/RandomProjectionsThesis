@@ -1,5 +1,5 @@
 import load_data_MITBIH as mb
-import ensemble_final as e
+import ensemble_WINNOW_testing as e
 import plot_curves as pc
 import matplotlib.pyplot as plt
 import load_data_NAB as nab
@@ -21,7 +21,8 @@ def convert(heart_beats_x):
 def get_scores(scores, heart_beats_x):
     beat_scores = np.full((len(heart_beats_x),1),0.0)
     for i, x in enumerate(heart_beats_x):
-        beat_scores[i] = max([scores[i - heart_beats_x[0][0]] for i in range(x[0], x[1])])
+        b = [scores[i - heart_beats_x[0][0]] for i in range(x[0], x[1])]
+        beat_scores[i] = max(b)
     return beat_scores
 
 def k_dependence():
@@ -37,8 +38,8 @@ def k_dependence():
     aucs_p = [[] for _ in range(10)]
     for k in range(1, 16):
         print(k)
-        for j in range(2):
-            scores = e.standardise_scores_z_score(e.random_projection_window(signal_norm, k, True, "prev", 2, 260))
+        for j in range(10):
+            scores = e.standardise_scores_z_score(e.random_projection_window(signal_norm, k, False, "prev", 2, 260))
             beat_scores = get_scores(scores, convert(heart_beats_x))
             tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(beat_scores, labels, min=min(beat_scores), max=max(beat_scores))
             aucs[j].append(roc_auc)
@@ -78,7 +79,7 @@ def random_projection_single(point, k, norm_perservation, norm_power, R):
         point_reconstruct = np.sqrt(d / k) * point_reconstruct
 
     outlier_score = np.linalg.norm(point - point_reconstruct) ** norm_power
-    return point_reconstruct[(len(point)-1)//2]
+    return outlier_score
 
 def random_projection_window(data, k, norm_perservation, win_pos, norm_power, win_length, R):
     # Parameters of random projection + window method.
@@ -105,6 +106,7 @@ def random_projection_window(data, k, norm_perservation, win_pos, norm_power, wi
             point = data[previous:future + 1]
 
         outlier_scores[i] = random_projection_single(point, k, norm_perservation, norm_power, R)
+
     return outlier_scores
 
 
@@ -175,26 +177,27 @@ def get_histo(labels, scores, guesses_index):
     outlier = []
     guesses = []
     for i, v in enumerate(labels):
-        if v == 1 and i not in guesses_index:
+        if v == 1 and i in guesses_index:
             guesses.append(scores[i])
         elif v == 1:  # outlier
             outlier.append(scores[i])
         else:
             normal.append(scores[i])
-    print(scores[812])
+    # print(scores[812],scores[4124], scores[6801])
     return normal, outlier, guesses
 
 def plot_histogram(name, scores, labels):
-    normal, outlier, guessed = get_histo(labels, scores, [4124, 6801])
+    # [4124, 6801]
+    normal, outlier, guessed = get_histo(labels, scores, [])
     plt.hist(np.array(normal).reshape(-1,), bins='auto', label="Normal", alpha=0.5)
-    plt.hist(np.array(outlier).reshape(-1,), bins='auto', density= True, label="Outliers", alpha=0.5)
-    plt.hist(np.array(guessed).reshape(-1, ), bins='auto', label="Interpolations", alpha=0.5)
-    plt.title(f"Histogram of Outlierness Scores for {name} method on differenced AMB dataset")
+    plt.hist(np.array(outlier).reshape(-1,), bins='auto', label="Outliers", alpha=0.5)
+    # plt.hist(np.array(guessed).reshape(-1, ), bins='auto', label="Interpolations", alpha=0.5)
+    plt.title(f"Histogram of Outlierness Scores for {name}")
+    plt.xlabel("Standardised MP outlierness scores")
     plt.legend()
 
     plt.show()
     plt.clf()
-
 
 def pres_norm():
     record, annotation = mb.load_mit_bih_data("100", sampfrom, sampto)
@@ -208,18 +211,22 @@ def pres_norm():
         beat_scores = get_scores(scores, convert(heart_beats_x))
         tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(beat_scores, labels, max(beat_scores), min(beat_scores))
         r.append(roc_auc)
-
-        scores = e.standardise_scores_z_score(e.random_projection_window(signal_norm, 1, False, "prev", 2, 260))
-        beat_scores = get_scores(scores, convert(heart_beats_x))
-        tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(beat_scores, labels, max(beat_scores), min(beat_scores))
-        t.append(roc_auc)
+        t.append(pr_auc)
+        # scores = e.standardise_scores_z_score(e.random_projection_window(signal_norm, 1, False, "prev", 2, 260))
+        # beat_scores = get_scores(scores, convert(heart_beats_x))
+        # tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(beat_scores, labels, max(beat_scores), min(beat_scores))
+        # t.append(roc_auc)
     print(max(r))
+    print(max(t))
     r.append(0.92)
-    plt.boxplot([r,t])
-    plt.xticks([1,2],["with norm preservation", "without norm preservation"])
-    plt.title("Box plot of AUC of 50 random projection runs with and without scaling")
-    plt.ylabel("ROC AUC")
-    plt.show()
+    print("with", np.mean(r), min(r), max(r))
+    print("with", np.mean(t), min(t), max(t))
+    # print("without", np.mean(t), min(t), max(t))
+    # plt.boxplot([r,t])
+    # plt.xticks([1,2],["with norm preservation", "without norm preservation"])
+    # plt.title("Box plot of AUC of 50 random projection runs with and without scaling")
+    # plt.ylabel("ROC AUC")
+    # plt.show()
     # plot_histogram("Sample 100", signal_norm, beat_scores, labels, [], 1, "np=False")
 
 
@@ -247,38 +254,39 @@ def window_dependence():
     signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_segments_q_points(record, annotation, sampfrom)
 
     r = []
-
-    for i, win in enumerate(range(250, 450, 10)):
-        scores = e.standardise_scores_z_score(e.mean_prime(signal_norm, "mid", 2, win))
+    t = []
+    for i, win in enumerate(range(150, 450, 10)):
+        scores = e.standardise_scores_z_score(e.random_projection_window(signal_norm, 1, False, "prev", 2, win))
         beat_scores = get_scores(scores, convert(heart_beats_x))
         tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(beat_scores, labels, max(beat_scores), min(beat_scores))
         r.append(roc_auc)
+        t.append(pr_auc)
 
-    x = range(250, 450, 10)
-    plt.plot(x, r)
+    x = range(150, 450, 10)
+    plt.plot(x, t)
     plt.title("AUC values for different window lengths")
     plt.xlabel("Window length $\ell$")
-    plt.ylabel("ROC AUC")
+    plt.ylabel("PR AUC")
     plt.show()
 
-def plot_scores_nab(name, signal,signal_diff, signal_diff_left, scores, labels):
+def plot_scores_nab(name, signal, signal_diff, signal_diff_left, scores, labels):
 
-    fig, axs = plt.subplots(3, 1)
+    fig, axs = plt.subplots(2, 1)
     axs[0].set_title(str(name).replace("_", " ").capitalize())
     outliers = []
     for i,l in enumerate(labels):
         if l == 1:
             outliers.append(i)
-    indices = [i for i in outliers if start <= i <= end]
-    axs[0].plot(range(start,end), signal, color= 'k')
+    indices = [i for i in outliers]
+    axs[0].plot(range(len(signal)), signal, color= 'k')
     # axs[0].scatter(812,signal[112], color='b', s=10, alpha=0.5)
     axs[0].set_ylabel("Original")
-    axs[0].scatter(indices,signal[np.array(indices) - start], color= 'yellow', s = 10, alpha=0.5)
-    axs[1].plot(range(start, end), signal_diff, color='k')
-    axs[1].scatter(indices,signal_diff[np.array(indices) - start], color= 'yellow', s = 10, alpha=0.5)
-    axs[1].set_ylabel("Right Differenced $\mathbf{X}\_\mathbf{r}$")
-    axs[2].set_ylabel("Random projection score \n (standardised)")
-    axs[2].bar(range(start,end),scores)
+    axs[0].scatter(indices,signal[np.array(indices)], color= 'yellow', s = 10, alpha=0.5)
+    # axs[1].plot(range(len(signal)), signal_diff, color='k')
+    # axs[1].scatter(indices,signal_diff[np.array(indices) - start], color= 'yellow', s = 10, alpha=0.5)
+    # axs[1].set_ylabel("Right Differenced $\mathbf{X}\_\mathbf{r}$")
+    axs[1].set_ylabel("Random projection score \n (standardised)")
+    axs[1].bar(range(len(signal)),scores)
     # axs[2].plot(range(700, 900), signal_diff_left, color='k')
     # axs[2].scatter(812, signal_diff_left[112], color='b', s=10, alpha=0.5)
     # axs[2].set_ylabel("Left Differenced $\mathbf{X}\_\mathbf{l}$")
@@ -314,3 +322,249 @@ def plot_scores_nab(name, signal,signal_diff, signal_diff_left, scores, labels):
 # # plot_scores_nab("Ambient temperature system failure", np.array(data.values)[start:end], signal_diff_right[start:end], signal_diff_left[start:end], scores[start:end], labels)
 # plot_histogram("Random Projection", scores, labels)
 
+# w = np.load("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/weights/weights.npy")
+# window = np.load("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/weights/windowing.npy", allow_pickle=True)
+#
+# plt.plot(range(len(w)), w)
+
+# mids = w[window[0]]
+# prevs = w[window[1]]
+# futures = w[window[2]]
+# print(mids[mids>0.001])
+# print(prevs[prevs>0.001])
+# print(futures[futures>0.001])
+# # print(futures)
+# # plt.hist(mids, bins=10, label="Mid", alpha=0.5)
+# # plt.hist(prevs, bins=10, label="Prev", alpha=0.5)
+# # plt.hist(futures, bins=10, label="Futures", alpha=0.5)
+# plt.show()
+
+@jit(nopython=True)
+def get_beat_score(all_scores, heart_beats_x):
+    all_scores_beats = np.full((len(all_scores),len(heart_beats_x)),0.0)
+    for i, score in enumerate(all_scores):
+        for j, x in enumerate(heart_beats_x):
+            beat_scores = [score[k-heart_beats_x[0][0]] for k in range(x[0], x[1])]
+            all_scores_beats[i][j] = max(beat_scores)
+    return all_scores_beats
+
+# record, annotation = mb.load_mit_bih_data(sample, sampfrom, sampto)
+# signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_segments_q_points(record, annotation, sampfrom)
+# timestamp = np.array([int(i) for i in range(len(signal_norm))])
+# signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
+# e.summarise_data(heart_beats, labels, [])
+# print("got scores")
+# scores_test, y_test, bin_test = e.summarise_scores_supervised(all_scores_beat, labels, test_size=0.2)
+# print(np.bincount(bin_test))
+# pc.compute_rates(scores_test, y_test, min(scores_test), max(scores_test))
+# diff = len(np.where(bin_test - y_test != 0)[0])
+# print(diff, diff/len(labels))
+def window_range():
+    max_window = 400
+    exp_range = np.unique(np.logspace(0, np.log(max_window), 70, dtype=int, base=np.e, endpoint=True))
+    print(sorted(exp_range),len(exp_range))
+    # plt.hist(exp_range, label= "old", alpha=0.5)
+    new_range = sorted(np.concatenate((max_window//2 + np.unique(np.logspace(0, np.log(max_window//2), 30, dtype=int, base=np.e, endpoint=True)), max_window//2 - np.unique(np.logspace(0, np.log(max_window//2), 30, dtype=int, base=np.e, endpoint=True)))))
+    print(new_range, len(new_range))
+    plt.hist(new_range)
+    plt.title("Range for $\ell$ for Sample 100")
+    plt.ylabel("Frequency")
+    plt.xlabel("$\ell$")
+    plt.show()
+
+
+def mp_diff():
+    sampfrom = 0
+    sampto = None
+
+    # name = "ambient_temperature_system_failure"
+    # data, labels = nab.load_data(f"realKnownCause/{name}.csv", False)
+    # data, labels, to_add_times, to_add_values = nab.clean_data(data, labels, name=name, unit=[0, 1], plot=False)
+    #
+    # guesses = [item for sublist in to_add_times for item in sublist[1:]]
+    #
+    # data = data.reset_index().set_index('timestamp')
+    # data = data.drop('index', axis=1)
+    # data.index = pd.to_datetime(data.index)
+
+    record, annotation = mb.load_mit_bih_data("100", sampfrom, sampto)
+    signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_segments_q_points(record, annotation, sampfrom)
+    timestamp = np.array([int(i) for i in range(len(signal_norm))])
+    data = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
+
+    signal = e.normalise(data.values)
+    signal_diff_right = e.normalise(data.diff().fillna(0).values)
+    signal_diff_right = np.array([np.abs(i) for i in signal_diff_right])
+    signal_diff_left = e.normalise(data.diff(-1).fillna(0).values)
+    signal_diff_left = np.array([np.abs(i) for i in signal_diff_left])
+
+    scores = e.mean_prime(signal_diff_right, "prev", 2, 370)
+    beat_scores = get_scores(scores, convert(heart_beats_x))
+    pc.compute_rates(beat_scores, labels, min(beat_scores), max(beat_scores))
+    plot_histogram("Sample 100", e.standardise_scores_z_score(beat_scores), labels)
+    # plot_scores_nab("Ambient temperature system failure", signal,signal_diff_right, signal_diff_left, scores, labels)
+
+
+import statsmodels.tsa.stattools as sm
+
+
+def autocorrelation_sm(data):
+    auto_coefficients = np.full(data.shape, 0.0)
+    for c in range(data.shape[1]):
+        auto_coefficients[:, c] = sm.acf(data[:, c], nlags=len(data))
+    return auto_coefficients
+
+
+def random_projection_window_auto(data, k, norm_perservation, win_pos, norm_power, win_length):
+    # Parameters of random projection + window method.
+    if win_pos == 'mid' and win_length != 1:
+        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length + 1))
+    else:
+        R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length))
+    outlier_scores = np.array([0.0 for _ in range(len(data))])
+    for i in range(len(data)):
+        if win_length == 1:
+            point = data[i].reshape(1, -1)
+        else:
+            if win_pos == 'prev':
+                previous = i - win_length + 1
+                future = i
+            elif win_pos == "mid":
+                previous = i - win_length // 2
+                future = i + win_length // 2
+            else:
+                previous = i
+                future = i + win_length - 1
+
+            if previous < 0:
+                previous = 0
+            if future >= len(data):
+                future = len(data) - 1
+
+            point = data[previous:future + 1]
+            point = autocorrelation_sm(point)
+
+        outlier_scores[i] = random_projection_single(point, k, norm_perservation, norm_power, R)
+    return outlier_scores
+
+import scipy.stats as ss
+
+
+def standardise_scores_rank(scores):
+    return ss.rankdata(scores, method='max')/(len(scores))
+
+def range_scale(scores):
+    return (scores - min(scores))/(max(scores)-min(scores))
+
+def ranking_test():
+    name = "ambient_temperature_system_failure"
+    data, labels = nab.load_data(f"realKnownCause/{name}.csv", False)
+    data, labels, to_add_times, to_add_values = nab.clean_data(data, labels, name=name, unit=[0, 1], plot=False)
+
+    guesses = [item for sublist in to_add_times for item in sublist[1:]]
+
+    data = data.reset_index().set_index('timestamp')
+    data = data.drop('index', axis=1)
+    data.index = pd.to_datetime(data.index)
+
+    # record, annotation = mb.load_mit_bih_data("100", sampfrom, sampto)
+    # signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_segments_q_points(record, annotation, sampfrom)
+    # timestamp = np.array([int(i) for i in range(len(signal_norm))])
+    # data = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
+    #
+    # signal = e.normalise(data.values)
+
+    # scores = e.standardise_scores_z_score(random_projection_window_auto(e.normalise(data), 1, False, 'prev', 2, 260))
+    # beat_scores = get_scores(scores, convert(heart_beats_x))
+    # # print(beat_scores)
+    # print(len(beat_scores), min(beat_scores), max(beat_scores))
+    # # plot_scores_nab(name, data.values, None, None, scores, labels)
+    # pc.compute_rates(beat_scores, labels, min(beat_scores), max(beat_scores))
+    # plot_histogram("Sample 100", beat_scores, labels)
+    signal_diff_right = e.normalise(data.diff().fillna(0).values)
+    signal_diff_right = np.array([np.abs(i) for i in signal_diff_right])
+    #
+    # scores = e.standardise_scores_z_score(e.random_projection_window(signal_diff_right, 1, False, 'mid', 2, 50))
+    # plt.hist(scores, bins='auto',  alpha=0.5)
+    # plt.show()
+    scores = standardise_scores_rank(e.random_projection_window(signal_diff_right, 1, False, 'mid', 2, 50))
+    plt.hist(scores, bins=20)
+    plt.title("Density of ranked scores of differenced signal (right)")
+    plt.ylabel("Frequency")
+    plt.xlabel("Ranked score")
+    plt.show()
+    scores = standardise_scores_rank(e.random_projection_window(e.normalise(data.values), 1, False, 'mid', 2, 50))
+    plt.hist(scores, bins=20)
+    plt.title("Density of ranked scores of original signal")
+    plt.ylabel("Frequency")
+    plt.xlabel("Ranked score")
+    plt.show()
+    # scores_2 = range_scale(e.random_projection_window(signal_diff_right, 1, False, 'mid', 2, 25))
+    # plt.hist(scores_2, bins='auto',  alpha=0.5)
+    # plt.show()
+
+def amb_average():
+    name = "ambient_temperature_system_failure"
+    data, labels = nab.load_data(f"realKnownCause/{name}.csv", False)
+    data, labels, to_add_times, to_add_values = nab.clean_data(data, labels, name=name, unit=[0, 1], plot=False)
+
+    guesses = [item for sublist in to_add_times for item in sublist[1:]]
+
+    data = data.reset_index().set_index('timestamp')
+    data = data.drop('index', axis=1)
+    data.index = pd.to_datetime(data.index)
+
+    scores_1 = e.standardise_scores_z_score(e.random_projection_window(data.values, 1, False, "mid", 2, 1))
+    scores_25 = e.standardise_scores_z_score(e.random_projection_window(data.values, 1, False, "mid", 2, 25))
+    scores_100 = e.standardise_scores_z_score(e.random_projection_window(data.values, 1, False, "mid", 2, 100))
+
+    dim = 1
+
+    columns = list(data.columns)
+
+    fig, axs = plt.subplots(4, 1, gridspec_kw={'height_ratios': [3,1,1,1]})
+    axs[0].set_title(str(name).replace("_", " ").capitalize())
+    axs[0].xaxis.set_visible(False)
+
+    outliers = data.index[np.where(np.array(labels) > 0)].tolist()
+
+    outliers = [i for i in outliers if i not in guesses]
+    guesses_values = [[] for _ in range(dim)]
+
+    outliers_values = [[] for _ in range(dim)]
+
+    for d in range(dim):
+        outliers_values[d] = data.loc[data.index.isin(outliers), columns[d]]
+        axs[d].plot(data.index, data[columns[d]], 'k')
+
+        guesses_values[d] = [item for sublist in to_add_values[d] for item in sublist]
+        axs[d].scatter(guesses, guesses_values[d], color='yellow')
+
+        axs[d].scatter(outliers, outliers_values[d], color='b', s=10, alpha=0.5)
+
+    axs[dim].plot(range(len(scores_1[15:-15])), scores_1[15:-15])
+    axs[dim].xaxis.set_visible(False)
+    axs[dim].set_ylabel("$\ell$=1", rotation=90)
+    axs[2].plot(range(len(scores_1[15:-15])), scores_25[15:-15])
+    axs[2].xaxis.set_visible(False)
+    axs[2].set_ylabel("$\ell$=25", rotation=90)
+    axs[3].plot(np.array(range(len(scores_1[50:-50])))+35, scores_100[50:-50])
+    axs[3].xaxis.set_visible(False)
+    axs[3].set_ylabel("$\ell$=100", rotation=90)
+    plt.show()
+
+def plot_histogram_beats():
+    sampfrom = 0
+    sampto = None
+
+    record, annotation = mb.load_mit_bih_data(123, sampfrom, sampto)
+    signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_segments_q_points(record, annotation, sampfrom)
+    timestamp = np.array([int(i) for i in range(len(signal_norm))])
+    signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
+
+    scores = np.load("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/scores_final_unstandardised_123_0.npy")
+    all_scores_beat = get_beat_score(scores, convert(heart_beats_x))
+    pc.plot_histogram(f"sample_123", signal, e.standardise_scores_z_score(all_scores_beat[100]), labels, None, runs=1, type="testing")
+
+
+mp_diff()

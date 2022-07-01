@@ -16,9 +16,9 @@ import load_data_MITBIH as mb
 import scipy.stats as ss
 
 
-def standardise_scores_rank(scores):
-    return ss.rankdata(scores, method='max')/(len(scores))
-
+# def standardise_scores_rank(scores):
+#     return ss.rankdata(scores, method='max')/(len(scores))
+#
 
 @jit(nopython=True)
 def standardise_scores_z_score(scores):
@@ -132,7 +132,7 @@ def normalise(signal):
 
 
 # Parallel tasks
-def task(win_length_max, signal, signal_diff_right, signal_diff_left, type, i):
+def task(win_length_max, signal, signal_diff_right, signal_diff_left, i):
     mode = random.choice([1, 2, 3])
     norm_perservation = random.choice([True, False])
     win_pos = random.choice(['prev', 'mid', 'future'])
@@ -159,41 +159,46 @@ def task(win_length_max, signal, signal_diff_right, signal_diff_left, type, i):
         else:
             scores = random_projection_window(signal_diff_left, k, norm_perservation, win_pos,
                                               norm_power, win_length)
-    if type == "rank":
-        return standardise_scores_rank(scores)
-    else:
-        return standardise_scores_z_score(scores)
+
+    return scores
+
+
+@jit(nopython=True)
+def standardise_sets(all_scores_train, all_scores_test):
+    train_normalised = np.full(all_scores_train.shape, 0.0)
+    test_normalised = np.full(all_scores_test.shape, 0.0)
+    for i,scores in enumerate(all_scores_train):
+        mu = np.mean(scores)
+        sigma = np.std(scores)
+        train_normalised[i, :] = (scores-mu)/sigma
+        test_normalised[i, :] = (all_scores_test[i]-mu)/sigma
+    return train_normalised, test_normalised
 
 
 @jit(nopython=True)
 def get_bin_sets(all_scores, indices_train, indices_test):
-    scores_binary = np.full(all_scores.shape, 0.0)
-    for i, scores in enumerate(all_scores):
-        scores_binary[i] = np.where((scores > 1.96) | (scores < -1.96), 1.0, 0.0)
-    train = scores_binary[:, indices_train.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    test = scores_binary[:, indices_test.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    return train, test
+    train = all_scores[:, indices_train.reshape(-1, )].reshape(all_scores.shape[0], -1).astype('float64')
+    test = all_scores[:, indices_test.reshape(-1, )].reshape(all_scores.shape[0], -1).astype('float64')
+
+    train_normalised, test_normalised = standardise_sets(train, test)
+
+    train_binary = np.full(train_normalised.shape, 0.0)
+    for i, scores in enumerate(train_normalised):
+        train_binary[i] = np.where((scores > 1.96) | (scores < -1.96), 1.0, 0.0)
+
+    test_binary = np.full(test_normalised.shape, 0.0)
+    for i, scores in enumerate(test_normalised):
+        test_binary[i] = np.where((scores > 1.96) | (scores < -1.96), 1.0, 0.0)
+
+    return train_binary, test_binary
 
 
 @jit(nopython=True)
-def get_bin_sets_ranked(all_scores, indices_train, indices_test):
-    scores_binary = np.full((2*all_scores.shape[0], all_scores.shape[1]), 0.0)
-    for i, scores in enumerate(all_scores):
-        up = np.quantile(scores, 0.99)
-        low = np.quantile(scores, 0.01)
-        scores_binary[i] = np.where((scores > up), 1.0, 0.0)
-        scores_binary[i+all_scores.shape[0]] = np.where((scores < low), 1.0, 0.0)
-    train = scores_binary[:, indices_train.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    test = scores_binary[:, indices_test.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    return train, test
-
-
-@jit(nopython=True)
-def get_weights(scores_train, y_train):
+def get_weights(scores_train, y_train, v):
     w = np.ones(scores_train.shape[0])
     weighted_scores_binary_train = np.full((len(y_train),), 0)
     c = 0
-    step_size = (sum(y_train)/len(y_train))/10
+    step_size = (sum(y_train)/len(y_train))/v
     threshold = 0.0
     errors = np.where(weighted_scores_binary_train - y_train != 0)[0]
     while (len(errors) / len(y_train) > threshold) or (c < np.log2(scores_train.shape[0])):
@@ -218,25 +223,34 @@ def get_weights(scores_train, y_train):
             threshold += step_size
             c = 0
 
-    print("error", len(errors) / len(y_train))
-    print("threshold: ", threshold)
-    print("c", c)
+    print("training error", len(errors) / len(y_train))
+    # print("threshold: ", threshold)
 
     return w
 
 
-def summarise_scores_supervised(all_scores, labels, test_size, type):
-    train_indices = np.array([i for i in range(len(labels))]).reshape(-1, 1)
-    X_train_i, X_test_i, y_train, y_test = sk.train_test_split(train_indices, labels, test_size=test_size, stratify=labels, random_state=42)
-    if type == "rank":
-        scores_train, scores_test = get_bin_sets_ranked(all_scores, X_train_i, X_test_i)
-    else:
-        scores_train, scores_test = get_bin_sets(all_scores, X_train_i, X_test_i)
-    del all_scores, train_indices, labels
-    w = get_weights(scores_train, np.array(y_train))
-    np.save("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/weights/weights", np.array(w))
-    predict_test = np.array(np.where((w.reshape(1, -1) @ scores_test)[0] > scores_train.shape[0], 1, 0))
-    return (w.reshape(1, -1) @ scores_test)[0], y_test, predict_test
+def summarise_scores_supervised_cross_val(all_scores, labels, folds, v):
+    roc_aucs = []
+    pr_aucs = []
+    accuracies = []
+    kf = sk.KFold(n_splits=folds)
+    for train, test in kf.split(np.array([i for i in range(len(labels))]).reshape(-1, 1)):
+        scores_train, scores_test = get_bin_sets(all_scores, train.reshape(-1, 1), test.reshape(-1, 1))
+        y_train = labels[train.reshape(-1,)]
+        y_test = labels[test.reshape(-1,)]
+        w = get_weights(scores_train, np.array(y_train), v)
+        np.save("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/weights/weights", np.array(w))
+
+        final_test_scores = (w.reshape(1, -1) @ scores_test)[0]
+        predict_test = np.array(np.where(final_test_scores > scores_train.shape[0], 1, 0))
+        tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(final_test_scores, y_test, min(final_test_scores), max(final_test_scores))
+        roc_aucs.append(roc_auc)
+        pr_aucs.append(pr_auc)
+
+        diff = len(np.where(predict_test - y_test != 0)[0])
+        accuracies.append(1-(diff / len(y_test)))
+
+    return np.mean(roc_aucs), np.std(roc_aucs), np.mean(pr_aucs),np.std(pr_aucs), np.mean(accuracies), np.std(accuracies)
 
 
 @jit(nopython=True)
@@ -262,7 +276,7 @@ def get_signals(data):
 
 
 # m = number of components
-def run(data, win_length_max, n_runs, parallelise, num_workers, type ="z"):
+def run(data, win_length_max, n_runs, parallelise, num_workers):
     outlier_scores_m = []
     index = []
 
@@ -271,21 +285,21 @@ def run(data, win_length_max, n_runs, parallelise, num_workers, type ="z"):
     if parallelise:
         with ProcessPoolExecutor(num_workers) as executor:
             for r in tqdm(
-                    [executor.submit(task, win_length_max, signal, signal_diff_right, signal_diff_left, type, i)
+                    [executor.submit(task, win_length_max, signal, signal_diff_right, signal_diff_left, i)
                      for i in
                      range(n_runs)]):
                 outlier_scores_m.append(r.result())
                 # index.append(r.result()[1])
     else:
         for i in tqdm(range(n_runs)):
-            outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, type, i))
+            outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, i))
     print("Summarising...")
     if len(data) > 10000:
-        name = 'scores'
+        name = 'scores_final_unstandardised'
         c = 0
         while os.path.exists(f'C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/{name}.npy'):
             c+=1
-            name = f'scores({c})'
+            name = f'scores_unstandardised_{c}'
         np.save(f"C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/{name}", outlier_scores_m)
 
     # index = np.array(index)
@@ -316,21 +330,39 @@ def run_NAB(n_runs, max_window_size, type, parallelise=False, num_workers=6):
     data = data.drop('index', axis=1)
     data.index = pd.to_datetime(data.index)
 
-    type = "z"
     summarise_data(data, labels, guesses)
-    all_scores = run(data, max_window_size, n_runs, parallelise, num_workers, type)
-    scores_test, y_test, bin_test = summarise_scores_supervised(all_scores, labels, test_size=0.2, type= type)
+    all_scores = run(data, max_window_size, n_runs, parallelise, num_workers)
 
-    print(scores_test[810], scores_test[811], scores_test[812], scores_test[813], scores_test[814], scores_test[815],
-          scores_test[816])
+    print(summarise_scores_supervised_cross_val(all_scores, np.array(labels), folds=3, v=10))
 
-    print(np.bincount(bin_test))
-    tpr, fpr, precision, roc_auc, pr_auc= pc.compute_rates(scores_test, y_test, min(scores_test), max(scores_test))
-    plt.plot(fpr, tpr)
-    diff = len(np.where(bin_test - y_test != 0)[0])
-    print(diff, diff / len(labels))
+    # print(np.bincount(bin_test))
+    # tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(scores_test, y_test, min(scores_test), max(scores_test))
+    # diff = len(np.where(bin_test - y_test != 0)[0])
+    # print(diff, diff / len(labels))
+
+    # print(scores_test[810], scores_test[811], scores_test[812], scores_test[813], scores_test[814], scores_test[815],
+    #       scores_test[816])
+
     # np.save(f"./output_scores/NAB_{name}_{n_runs}_{type}", scores_test)
     # pc.all_plots(name, data, scores_test, y_test, None, None, None, None, runs=n_runs, type=type)
+
+
+def convert(heart_beats_x):
+    heart_beats_x_array = []
+    for x in heart_beats_x:
+        heart_beats_x_array.append([x[0],x[-1]])
+    return np.array(heart_beats_x_array)
+
+
+@jit(nopython=True)
+def get_beat_score(all_scores, heart_beats_x):
+    all_scores_beats = np.full((len(all_scores),len(heart_beats_x)),0.0)
+
+    for i, score in enumerate(all_scores):
+        for j, x in enumerate(heart_beats_x):
+            beat_scores = [score[k-heart_beats_x[0][0]] for k in range(x[0], x[1])]
+            all_scores_beats[i][j] = max(beat_scores)
+    return all_scores_beats
 
 
 def run_MITBIH(sample, n_runs, max_window_size, type, parallelise=False, num_workers=6):
@@ -344,16 +376,12 @@ def run_MITBIH(sample, n_runs, max_window_size, type, parallelise=False, num_wor
     signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
 
     summarise_data(signal, labels, [])
-    # scores = run(signal,max_window_size, n_runs, parallelise, num_workers)
-    # print("Plotting...")
 
-    # pc.all_plots(f"sample_{sample}", signal, scores, labels, None, None, None, None, runs=n_runs, type=type)
     all_scores = run(signal, max_window_size, n_runs, parallelise, num_workers)
-    # scores_test, y_test = summarise_scores_supervised(all_scores, labels)
-    scores = summarise_scores(all_scores)
-    pc.compute_rates(scores, labels, min(scores), max(scores))
-    # diff = len(np.where(scores_test - y_test != 0)[0])
-    # print(diff, diff / len(y_test))
+    all_scores_beat = get_beat_score(all_scores, convert(heart_beats_x))
+    print("got scores")
+    print(summarise_scores_supervised_cross_val(all_scores_beat, np.array(labels), folds=3, v=10))
+
     # np.save(f"./output_scores/MITBIH_sample_{sample}_{n_runs}_{type}", scores_test)
     # pc.all_plots(f"sample_{sample}", signal, scores_test, y_test, None, None, None, None, runs=n_runs, type=type)
 
