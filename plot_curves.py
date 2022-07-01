@@ -3,7 +3,7 @@ import sklearn.metrics as metrics
 import matplotlib.pyplot as plt
 
 
-# Counts number of normal points, outliers, and interpolations.
+# Counts number of normal points, outliers, and interpolated points.
 def get_histo(labels, scores, interpolations_index):
     normal = []
     outlier = []
