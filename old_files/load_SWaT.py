@@ -1,9 +1,8 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
-import ensemble as e
+from old_files import ensemble as e
 import plot_curves as pc
 
 

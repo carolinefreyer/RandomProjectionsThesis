@@ -137,7 +137,7 @@ def normalise(signal):
 def task(win_length_max, signal, signal_diff_right, signal_diff_left, i):
     mode = random.choice([1, 2, 3])
     norm_perservation = random.choice([True, False])
-    win_pos = random.choice(['mid'])
+    win_pos = random.choice(['prev', 'mid', 'future'])
     norm_power = random.choice([0.5, 1, 2, 3, 4])
     # window_length_range = np.unique(np.logspace(0, np.log(win_length_max), 50, dtype=int, base=np.e, endpoint=True))
     window_length_range = np.concatenate((win_length_max//2 + np.unique(np.logspace(0, np.log(win_length_max//2), 30, dtype=int, base=np.e, endpoint=True)), win_length_max//2 - np.unique(np.logspace(0, np.log(win_length_max//2), 30, dtype=int, base=np.e, endpoint=True))))
@@ -403,7 +403,7 @@ def run_NAB(n_runs, max_window_size, type, parallelise=False, num_workers=6):
 
     summarise_data(data, labels, guesses)
     s = time.time()
-    all_scores = np.load("./output_scores_NAB/scores_final_unstandardised_5.npy")
+    all_scores = np.load("../output_scores_NAB/scores_final_unstandardised_5.npy")
     # all_scores = run(data, max_window_size, n_runs, parallelise, num_workers)
     ########################################## Percentage labels ################################################################
             # np.random.seed(0)

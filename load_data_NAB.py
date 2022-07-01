@@ -6,18 +6,19 @@ import matplotlib.pyplot as plt
 from datetime import timedelta
 
 
-def guess(arr, first, last, labels):
+# Recursively interpolates between two known points.
+def interpolate(arr, first, last):
     mid = (last + first) // 2
     arr[mid] = (arr[first] + arr[last]) / 2
-    labels[mid] = max(labels[first], labels[last])
     if mid - 1 != first:
-        arr, labels = guess(arr, first, mid, labels)
+        arr = interpolate(arr, first, mid)
     if mid + 1 != last:
-        arr, labels = guess(arr, mid, last, labels)
+        arr = interpolate(arr, mid, last)
 
-    return arr, labels
+    return arr
 
 
+# Finds missing values and calls function for interpolation.
 def clean_data(data, labels, name, unit=None, plot=False):
     dim = len(data.columns) - 1
     missing_values = False
@@ -27,6 +28,7 @@ def clean_data(data, labels, name, unit=None, plot=False):
         to_add_labels = []
         to_add_values = [[] for _ in range(dim)]
         for i in range(len(data['timestamp']) - 1):
+            # If there is a gap in the time series: interpolate.
             if ((data['timestamp'].iloc[i] + timedelta(hours=unit[1], minutes=unit[0]))
                     < data['timestamp'].iloc[i + 1]):
                 missing_values = True
@@ -36,18 +38,17 @@ def clean_data(data, labels, name, unit=None, plot=False):
                 values.extend([0 for _ in range(difference - 1)])
                 values.append(data['value'].iloc[i + 1])
 
-                guess_labels = [labels[i]]
-                guess_labels.extend([0 for _ in range(difference - 1)])
-                guess_labels.append(labels[i])
+                values = interpolate(values, 0, len(values) - 1)
 
-                values, guess_labels = guess(values, 0, len(values) - 1, guess_labels)
-                if difference > 2:
-                    guess_labels = [labels[i]]
-                    guess_labels.extend([1 for _ in range(difference - 1)])
-                    guess_labels.append(labels[i])
+                if difference > 1:
+                    interpolation_labels = [labels[i]]
+                    interpolation_labels.extend([1 for _ in range(difference - 1)])
+                    interpolation_labels.append(labels[i])
+                else:
+                    interpolation_labels = [labels[i], 0, labels[i]]
 
                 to_add_values[0].append(values[1:-1])
-                to_add_labels.append(guess_labels[1:-1])
+                to_add_labels.append(interpolation_labels[1:-1])
 
                 times = []
                 d1 = data['timestamp'].iloc[i]
@@ -57,7 +58,7 @@ def clean_data(data, labels, name, unit=None, plot=False):
                     times.append(d1)
                     d1 += delta
                 to_add_times.append(times)
-
+        # Add interpolations to the dataset.
         for i, time in enumerate(to_add_times):
             index = data.index[data['timestamp'] == time[0]].tolist()[0] + 1
             indices = [index + i for i in range(1, len(time))]
@@ -68,17 +69,18 @@ def clean_data(data, labels, name, unit=None, plot=False):
         if missing_values:
             print("Missing values in dataset.")
 
+    # Plots dataset with interpolations highlighted in yellow and original outliers in blue.
     if plot:
         if missing_values:
-            guesses = [item for sublist in to_add_times for item in sublist[1:]]
-            guesses_values = [item for sublist in to_add_values[0] for item in sublist]
+            interpolations = [item for sublist in to_add_times for item in sublist[1:]]
+            interpolation_values = [item for sublist in to_add_values[0] for item in sublist]
 
         plt.plot(data['timestamp'], data['value'], 'k')
 
         outliers = data.loc[np.where(np.array(labels) > 0), 'timestamp']
         if missing_values:
-            outliers = [i for i in outliers.values if i not in guesses]
-            plt.scatter(guesses, guesses_values, color='yellow')
+            outliers = [i for i in outliers.values if i not in interpolations]
+            plt.scatter(interpolations, interpolation_values, color='yellow')
 
         outliers_values = data.loc[data['timestamp'].isin(outliers), 'value']
         plt.scatter(outliers, outliers_values, color='b')
@@ -90,6 +92,7 @@ def clean_data(data, labels, name, unit=None, plot=False):
     return data, labels, to_add_times, to_add_values
 
 
+# Loads original NAB dataset.
 def load_data(name, plot):
     path = "C:/Users/carol/PycharmProjects/RandomProjectionsThesis/data/NAB/"
     data = pd.read_csv(os.path.join(path, f"data/{name}"))

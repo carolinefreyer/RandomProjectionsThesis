@@ -1,5 +1,5 @@
 import load_data_MITBIH as mb
-import ensemble_WINNOW_testing as e
+from old_files import ensemble_WINNOW_testing as e
 import plot_curves as pc
 import matplotlib.pyplot as plt
 import load_data_NAB as nab

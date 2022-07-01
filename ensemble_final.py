@@ -1,6 +1,5 @@
 import numpy as np
 import random
-import os
 from numba import jit
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
@@ -8,23 +7,12 @@ from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 import argparse
 import sklearn.model_selection as sk
-import matplotlib.pyplot as plt
-
 import load_data_NAB as nab
 import plot_curves as pc
 import load_data_MITBIH as mb
-import scipy.stats as ss
 
 
-def standardise_scores_rank(scores):
-    return ss.rankdata(scores, method='max')/(len(scores))
-
-
-@jit(nopython=True)
-def standardise_scores_z_score(scores):
-    return (scores - np.mean(scores)) / np.std(scores)
-
-
+# Computes mean of matrix columns using Numba.
 @jit(nopython=True)
 def mean_columns(point):
     means = []
@@ -35,8 +23,9 @@ def mean_columns(point):
     return np.array(means)
 
 
+# Mean Projection method: constructs windows and computes outlierness score for each time point.
 @jit(nopython=True)
-def mean_prime(signal, win_pos, norm_power, win_length):
+def mean_projection(signal, win_pos, norm_power, win_length):
     outlier_scores = np.array([0.0 for _ in range(len(signal))])
     for i in range(0, len(signal)):
         if win_pos == 'prev':
@@ -48,7 +37,7 @@ def mean_prime(signal, win_pos, norm_power, win_length):
             previous = i - win_length // 2
             future = i + win_length // 2
         else:
-            if i == len(signal) -1:
+            if i == len(signal) - 1:
                 continue
             previous = i
             future = i + win_length - 1
@@ -63,7 +52,7 @@ def mean_prime(signal, win_pos, norm_power, win_length):
         elif win_pos == "mid":
             point = np.concatenate((signal[previous:i], signal[i + 1:future + 1]))
         else:
-            point = signal[i+1:future+1]
+            point = signal[i + 1:future + 1]
 
         mean = mean_columns(point)
         score = np.linalg.norm(signal[i] - mean) ** norm_power
@@ -72,10 +61,11 @@ def mean_prime(signal, win_pos, norm_power, win_length):
     return outlier_scores
 
 
+# Random projection with outlierness score computation for a single window
 @jit(nopython=True)
 def random_projection_single(point, k, norm_perservation, norm_power, R):
     d = R.shape[1]
-    # If window smaller than d
+    # If window smaller than d (equivalent to padding with zeroes).
     if len(point) < d:
         R_prime = R[:, :len(point)]
         point_proj = (1 / np.sqrt(d) * R_prime) @ point
@@ -92,9 +82,10 @@ def random_projection_single(point, k, norm_perservation, norm_power, R):
     return outlier_score
 
 
+# Random Projection method: constructs windows and calls random projection per window.
 @jit(nopython=True)
 def random_projection_window(data, k, norm_perservation, win_pos, norm_power, win_length):
-    # Parameters of random projection + window method.
+    # Constructs R only once. Same R is used for all time points.
     if win_pos == 'mid' and win_length != 1:
         R = np.random.normal(loc=0.0, scale=1.0, size=(k, win_length + 1))
     else:
@@ -125,84 +116,102 @@ def random_projection_window(data, k, norm_perservation, win_pos, norm_power, wi
     return outlier_scores
 
 
+# Normalise different components of the time series.
 def normalise(signal):
     # centering and scaling happens independently on each signal
     scaler = StandardScaler()
     return scaler.fit_transform(signal)
 
 
-# Parallel tasks
-def task(win_length_max, signal, signal_diff_right, signal_diff_left, type, i):
+# Ensemble component.
+def task(win_length_max, signal, signal_diff_right, signal_diff_left, i):
+    # Mode chooses type of outlier detection method. 1) MP, 2) RP on original time series, 3) RP on differenced time series.
     mode = random.choice([1, 2, 3])
+
+    # Sample method parameters.
     norm_perservation = random.choice([True, False])
     win_pos = random.choice(['prev', 'mid', 'future'])
     norm_power = random.choice([0.5, 1, 2, 3, 4])
-    # window_length_range = np.unique(np.logspace(0, np.log(win_length_max), 50, dtype=int, base=np.e, endpoint=True))
-    window_length_range = np.concatenate((win_length_max//2 + np.unique(np.logspace(0, np.log(win_length_max//2), 30, dtype=int, base=np.e, endpoint=True)), win_length_max//2 - np.unique(np.logspace(0, np.log(win_length_max//2), 30, dtype=int, base=np.e, endpoint=True))))
-    k_range = np.array([1,3,10])
+    window_length_range = np.concatenate((win_length_max // 2 + np.unique(
+        np.logspace(0, np.log(win_length_max // 2), 30, dtype=int, base=np.e, endpoint=True)),
+                                          win_length_max // 2 - np.unique(
+                                              np.logspace(0, np.log(win_length_max // 2), 30, dtype=int, base=np.e,
+                                                          endpoint=True))))
+    k_range = np.array([1, 3, 10])
 
-    if mode == 1:  # mu
+    if mode == 1:  # MP
         win_length = random.choice(window_length_range[window_length_range > 1])
-        scores = mean_prime(signal, win_pos, norm_power, win_length)
-    elif mode == 2:  # normal RP
+        scores = mean_projection(signal, win_pos, norm_power, win_length)
+    elif mode == 2:  # RP on original time series
         win_length = random.choice(window_length_range)
         k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
         scores = random_projection_window(signal, k, norm_perservation, win_pos,
                                           norm_power, win_length)
-    else:  # RP on differenced signal
+    else:  # RP on differenced time series
         direction = random.choice(["left", "right"])
         win_length = random.choice(window_length_range)
         k = random.choice(k_range[k_range <= min(win_length, max(k_range))])
+        # Randomly choose direction of differencing.
         if direction == "right":
             scores = random_projection_window(signal_diff_right, k, norm_perservation, win_pos,
                                               norm_power, win_length)
         else:
             scores = random_projection_window(signal_diff_left, k, norm_perservation, win_pos,
                                               norm_power, win_length)
-    if type == "rank":
-        return standardise_scores_rank(scores)
-    else:
-        return standardise_scores_z_score(scores)
+
+    return scores
 
 
+# Z-score standardisation of training and test set.
 @jit(nopython=True)
-def get_bin_sets(all_scores, indices_train, indices_test):
-    scores_binary = np.full(all_scores.shape, 0.0)
-    for i, scores in enumerate(all_scores):
-        scores_binary[i] = np.where((scores > 1.96) | (scores < -1.96), 1.0, 0.0)
-    train = scores_binary[:, indices_train.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    test = scores_binary[:, indices_test.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    return train, test
+def standardise_sets(all_scores_train, all_scores_test):
+    train_normalised = np.full(all_scores_train.shape, 0.0)
+    test_normalised = np.full(all_scores_test.shape, 0.0)
+    for i, scores in enumerate(all_scores_train):
+        mu = np.mean(scores)
+        sigma = np.std(scores)
+        train_normalised[i, :] = (scores - mu) / sigma
+        # Standardise test set using same mean and standard deviation.
+        test_normalised[i, :] = (all_scores_test[i] - mu) / sigma
+    return train_normalised, test_normalised
 
 
+# Binarise training and test set.
 @jit(nopython=True)
-def get_bin_sets_ranked(all_scores, indices_train, indices_test):
-    scores_binary = np.full((2*all_scores.shape[0], all_scores.shape[1]), 0.0)
-    for i, scores in enumerate(all_scores):
-        up = np.quantile(scores, 0.99)
-        low = np.quantile(scores, 0.01)
-        scores_binary[i] = np.where((scores > up), 1.0, 0.0)
-        scores_binary[i+all_scores.shape[0]] = np.where((scores < low), 1.0, 0.0)
-    train = scores_binary[:, indices_train.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    test = scores_binary[:, indices_test.reshape(-1,)].reshape(scores_binary.shape[0], -1).astype('float64')
-    return train, test
+def get_binary_sets(all_scores, indices_train, indices_test):
+    train = all_scores[:, indices_train.reshape(-1, )].reshape(all_scores.shape[0], -1).astype('float64')
+    test = all_scores[:, indices_test.reshape(-1, )].reshape(all_scores.shape[0], -1).astype('float64')
+
+    train_normalised, test_normalised = standardise_sets(train, test)
+
+    train_binary = np.full(train_normalised.shape, 0.0)
+    for i, scores in enumerate(train_normalised):
+        train_binary[i] = np.where((scores > 1.96) | (scores < -1.96), 1.0, 0.0)
+
+    test_binary = np.full(test_normalised.shape, 0.0)
+    for i, scores in enumerate(test_normalised):
+        test_binary[i] = np.where((scores > 1.96) | (scores < -1.96), 1.0, 0.0)
+
+    return train_binary, test_binary
 
 
+# WINNOW weighting for each ensemble component.
 @jit(nopython=True)
-def get_weights(scores_train, y_train):
+def get_weights(scores_train, y_train, v):
     w = np.ones(scores_train.shape[0])
     weighted_scores_binary_train = np.full((len(y_train),), 0)
     c = 0
-    step_size = (sum(y_train)/len(y_train))/10
+    step_size = (sum(y_train) / len(y_train)) / v
     threshold = 0.0
     errors = np.where(weighted_scores_binary_train - y_train != 0)[0]
+    # While tolerated error is not reached, reweigh.
     while (len(errors) / len(y_train) > threshold) or (c < np.log2(scores_train.shape[0])):
         for i in errors:
-            if y_train[i] == 1: #Then score is 0 ==> False Negative
+            if y_train[i] == 1:  # Then score is 0 ==> False Negative
                 for j, s in enumerate(scores_train[:, i]):
                     if s == 1:
                         w[j] = w[j] * 2
-            if y_train[i] == 0: #Then score is 0 ==> False Positive
+            if y_train[i] == 0:  # Then score is 0 ==> False Positive
                 for j, s in enumerate(scores_train[:, i]):
                     if s == 1:
                         w[j] = w[j] / 2
@@ -211,34 +220,62 @@ def get_weights(scores_train, y_train):
 
         errors = np.where(weighted_scores_binary_train - y_train != 0)[0]
 
-        c +=1
-
-        if c == int(50*np.log2(scores_train.shape[0])):
+        c += 1
+        # Increase tolerated error.
+        if c == int(50 * np.log2(scores_train.shape[0])):
             print("upped")
             threshold += step_size
             c = 0
 
-    print("error", len(errors) / len(y_train))
-    print("threshold: ", threshold)
-    print("c", c)
+    # print("training error", len(errors) / len(y_train))
 
     return w
 
 
-def summarise_scores_supervised(all_scores, labels, test_size, type):
-    train_indices = np.array([i for i in range(len(labels))]).reshape(-1, 1)
-    X_train_i, X_test_i, y_train, y_test = sk.train_test_split(train_indices, labels, test_size=test_size, stratify=labels, random_state=42)
-    if type == "rank":
-        scores_train, scores_test = get_bin_sets_ranked(all_scores, X_train_i, X_test_i)
-    else:
-        scores_train, scores_test = get_bin_sets(all_scores, X_train_i, X_test_i)
-    del all_scores, train_indices, labels
-    w = get_weights(scores_train, np.array(y_train))
-    np.save("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/weights/weights", np.array(w))
-    predict_test = np.array(np.where((w.reshape(1, -1) @ scores_test)[0] > scores_train.shape[0], 1, 0))
-    return (w.reshape(1, -1) @ scores_test)[0], y_test, predict_test
+# WINNOW aggregation with cross validation.
+def winnow_cross_val(all_scores, labels, semi_labels=None, folds=3, v=10):
+    roc_aucs = []
+    pr_aucs = []
+    accuracies = []
+    # Split time series into folds.
+    kf = sk.KFold(n_splits=folds)
+    for train, test in kf.split(np.array([i for i in range(len(labels))]).reshape(-1, 1)):
+        y_test = labels[test.reshape(-1, )]
+        # Cannot evaluate a split with no outliers.
+        if 1 not in y_test:
+            print(
+                "Warning: Test set contains no outliers so was skipped during evaluation.")
+            continue
+        # Semi-supervised variant.
+        if semi_labels is not None:
+            y_train = semi_labels[train.reshape(-1, )]
+        else:
+            y_train = labels[train.reshape(-1, )]
+        scores_train, scores_test = get_binary_sets(all_scores, train.reshape(-1, 1), test.reshape(-1, 1))
+
+        # Determine weights.
+        w = get_weights(scores_train, np.array(y_train), v)
+
+        # Predict scores of test set.
+        final_test_scores = (w.reshape(1, -1) @ scores_test)[0]
+        predict_test = np.array(np.where(final_test_scores > scores_train.shape[0], 1, 0))
+
+        # Compute TPR, FPR, precision, ROC AUC, and PR AUC
+        tpr, fpr, precision, roc_auc, pr_auc = pc.compute_rates(final_test_scores, y_test, min(final_test_scores),
+                                                                max(final_test_scores))
+        roc_aucs.append(roc_auc)
+        pr_aucs.append(pr_auc)
+
+        # Compute accuracy
+        diff = len(np.where(predict_test - y_test != 0)[0])
+        accuracies.append(1 - (diff / len(y_test)))
+
+    print(f"\n{folds}-fold cross validation:")
+    print("ROC AUC: ", np.round(np.mean(roc_aucs), 3), "PR AUC: ", np.round(np.mean(pr_aucs), 3))
+    return
 
 
+# Unsupervised aggregation.
 @jit(nopython=True)
 def summarise_scores(all_scores):
     final_scores = np.array([0.0 for _ in range(len(all_scores[0]))])
@@ -250,7 +287,7 @@ def summarise_scores(all_scores):
     return final_scores
 
 
-# labels = df_train['Normal/Attack'].to_numpy().astype('int')
+# Normalise and difference signal.
 def get_signals(data):
     signal = normalise(data.values)
     signal_diff_right = normalise(data.diff().fillna(0).values)
@@ -261,103 +298,111 @@ def get_signals(data):
     return signal, signal_diff_right, signal_diff_left
 
 
-# m = number of components
-def run(data, win_length_max, n_runs, parallelise, num_workers, type ="z"):
+# Runs the ensemble, calling components in parallel.
+def run(data, win_length_max, n_runs, parallelise, num_workers):
     outlier_scores_m = []
-    index = []
 
+    # Difference signal once beforehand to save time.
     signal, signal_diff_right, signal_diff_left = get_signals(data)
 
     if parallelise:
         with ProcessPoolExecutor(num_workers) as executor:
             for r in tqdm(
-                    [executor.submit(task, win_length_max, signal, signal_diff_right, signal_diff_left, type, i)
+                    [executor.submit(task, win_length_max, signal, signal_diff_right, signal_diff_left, i)
                      for i in
                      range(n_runs)]):
                 outlier_scores_m.append(r.result())
-                # index.append(r.result()[1])
     else:
         for i in tqdm(range(n_runs)):
-            outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, type, i))
+            outlier_scores_m.append(task(win_length_max, signal, signal_diff_right, signal_diff_left, i))
     print("Summarising...")
-    if len(data) > 10000:
-        name = 'scores'
-        c = 0
-        while os.path.exists(f'C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/{name}.npy'):
-            c+=1
-            name = f'scores({c})'
-        np.save(f"C:/Users/carol/PycharmProjects/RandomProjectionsThesis/output_scores_MITBIH/{name}", outlier_scores_m)
-
-    # index = np.array(index)
-
-    # mmm = list(np.where(index == 'mid')[0])
-    # ppp = list(np.where(index == 'prev')[0])
-    # fff = list(np.where(index == 'future')[0])
-    # windowing = np.array([mmm, ppp, fff])
-    # np.save("C:/Users/carol/PycharmProjects/RandomProjectionsThesis/weights/windowing", np.array(windowing))
-
     return np.array(outlier_scores_m)
 
 
+# Outputs summary of dataset.
 def summarise_data(data, labels, guesses):
     print("Total number of data points:", len(data))
     print(f"Total number of outliers: {sum(labels)} ({(sum(labels) / len(labels)) * 100:.3f} %)")
     print(f"Total number of guesses: {len(guesses)} ({(len(guesses) / len(data)) * 100:.3f} %)")
 
 
-def run_NAB(n_runs, max_window_size, type, parallelise=False, num_workers=6):
+# RPOE run on AMB dataset.
+def run_AMB(n_runs, max_window_size, semi_supervised=False, parallelise=False, num_workers=6):
+    # Load dataset.
     name = "ambient_temperature_system_failure"
     data, labels = nab.load_data(f"realKnownCause/{name}.csv", False)
     data, labels, to_add_times, to_add_values = nab.clean_data(data, labels, name=name, unit=[0, 1], plot=False)
-
     guesses = [item for sublist in to_add_times for item in sublist[1:]]
 
     data = data.reset_index().set_index('timestamp')
     data = data.drop('index', axis=1)
     data.index = pd.to_datetime(data.index)
 
-    type = "z"
     summarise_data(data, labels, guesses)
-    all_scores = run(data, max_window_size, n_runs, parallelise, num_workers, type)
-    scores_test, y_test, bin_test = summarise_scores_supervised(all_scores, labels, test_size=0.2, type= type)
 
-    print(scores_test[810], scores_test[811], scores_test[812], scores_test[813], scores_test[814], scores_test[815],
-          scores_test[816])
+    # Run ensemble.
+    all_scores = run(data, max_window_size, n_runs, parallelise, num_workers)
 
-    print(np.bincount(bin_test))
-    tpr, fpr, precision, roc_auc, pr_auc= pc.compute_rates(scores_test, y_test, min(scores_test), max(scores_test))
-    plt.plot(fpr, tpr)
-    diff = len(np.where(bin_test - y_test != 0)[0])
-    print(diff, diff / len(labels))
-    # np.save(f"./output_scores/NAB_{name}_{n_runs}_{type}", scores_test)
-    # pc.all_plots(name, data, scores_test, y_test, None, None, None, None, runs=n_runs, type=type)
+    # Aggregation.
+    if semi_supervised:
+        sample_size = int(0.8 * len(labels))
+        kept_true_labels = np.random.choice(range(len(labels)), sample_size, replace=False)
+        semi_supervised_labels = [labels[i] if i in kept_true_labels else 0 for i in range(len(labels))]
+        winnow_cross_val(all_scores, np.array(labels),
+                         semi_labels=np.array(semi_supervised_labels))
+    else:
+        winnow_cross_val(all_scores, np.array(labels), semi_labels=np.array(labels))
 
 
-def run_MITBIH(sample, n_runs, max_window_size, type, parallelise=False, num_workers=6):
+# Convert type for Numba run.
+def convert(heart_beats_x):
+    heart_beats_x_array = []
+    for x in heart_beats_x:
+        heart_beats_x_array.append([x[0], x[-1]])
+    return np.array(heart_beats_x_array)
+
+
+# Summarise individual time point scores into beat scores.
+@jit(nopython=True)
+def get_beat_score(all_scores, heart_beats_x):
+    all_scores_beats = np.full((len(all_scores), len(heart_beats_x)), 0.0)
+    for i, score in enumerate(all_scores):
+        for j, x in enumerate(heart_beats_x):
+            beat_scores = [score[k - heart_beats_x[0][0]] for k in range(x[0], x[1])]
+            all_scores_beats[i][j] = max(beat_scores)
+    return all_scores_beats
+
+
+# RPOE run on a sample of the MITBIH dataset.
+def run_MITBIH(sample, n_runs, max_window_size, semi_supervised=False, parallelise=False, num_workers=6):
+    # Load dataset.
     sampfrom = 0
     sampto = None
 
     record, annotation = mb.load_mit_bih_data(sample, sampfrom, sampto)
-    signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_q_points_single(record, annotation, sampfrom,
-                                                                                     sampto)
+    signal_norm, heart_beats, heart_beats_x, labels = mb.label_clean_segments_q_points(record, annotation, sampfrom)
     timestamp = np.array([int(i) for i in range(len(signal_norm))])
     signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
 
-    summarise_data(signal, labels, [])
-    # scores = run(signal,max_window_size, n_runs, parallelise, num_workers)
-    # print("Plotting...")
+    summarise_data(heart_beats, labels, [])
 
-    # pc.all_plots(f"sample_{sample}", signal, scores, labels, None, None, None, None, runs=n_runs, type=type)
+    # Run ensemble.
     all_scores = run(signal, max_window_size, n_runs, parallelise, num_workers)
-    # scores_test, y_test = summarise_scores_supervised(all_scores, labels)
-    scores = summarise_scores(all_scores)
-    pc.compute_rates(scores, labels, min(scores), max(scores))
-    # diff = len(np.where(scores_test - y_test != 0)[0])
-    # print(diff, diff / len(y_test))
-    # np.save(f"./output_scores/MITBIH_sample_{sample}_{n_runs}_{type}", scores_test)
-    # pc.all_plots(f"sample_{sample}", signal, scores_test, y_test, None, None, None, None, runs=n_runs, type=type)
+    # Summarise individual scores into beat scores.
+    all_scores_beat = get_beat_score(all_scores, convert(heart_beats_x))
+
+    # Aggregation.
+    if semi_supervised:
+        sample_size = int(0.8 * len(labels))
+        kept_true_labels = np.random.choice(range(len(labels)), sample_size, replace=False)
+        semi_supervised_labels = [labels[i] if i in kept_true_labels else 0 for i in range(len(labels))]
+        winnow_cross_val(all_scores_beat, np.array(labels),
+                         semi_labels=np.array(semi_supervised_labels))
+    else:
+        winnow_cross_val(all_scores_beat, np.array(labels), semi_labels=np.array(labels))
 
 
+# Run RPOE on different datasets based on parameter settings.
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -367,14 +412,14 @@ if __name__ == '__main__':
                         help='Number of iterations')
     parser.add_argument('--max_window_length', type=int, default=100,
                         help='Maximum window size')
-    parser.add_argument('--type', type=str, default="testing",
-                        help='Test ID')
     parser.add_argument('--parallelise', type=bool, default=False, action=argparse.BooleanOptionalAction,
                         help='Whether to parallelise the iterations or not.')
     parser.add_argument('--num_workers', type=int, default=6,
                         help='Number of parallel workers.')
     parser.add_argument('--sample', type=int, default=100,
                         help='Patient number of MITBIH Dataset.')
+    parser.add_argument('--semi-supervised', type=bool, default=False, action=argparse.BooleanOptionalAction,
+                        help='Supervised or semi-supervised method.')
 
     args = parser.parse_args()
 
@@ -384,8 +429,8 @@ if __name__ == '__main__':
     print("Ran with parameters:", str_print)
 
     if args.dataset == "NAB":
-        run_NAB(n_runs=args.n_runs, max_window_size=args.max_window_length, type=args.type, parallelise=args.parallelise,
+        run_AMB(n_runs=args.n_runs, max_window_size=args.max_window_length, parallelise=args.parallelise,
                 num_workers=args.num_workers)
     elif args.dataset == "MITBIH":
-        run_MITBIH(sample=args.sample, n_runs=args.n_runs, max_window_size=args.max_window_length, type=args.type,
+        run_MITBIH(sample=args.sample, n_runs=args.n_runs, max_window_size=args.max_window_length,
                    parallelise=args.parallelise, num_workers=args.num_workers)

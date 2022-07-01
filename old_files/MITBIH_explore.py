@@ -5,8 +5,7 @@ import matplotlib.pyplot as plt
 from numba import jit
 
 import load_data_MITBIH as mb
-import ensemble_WINNOW_testing as e
-import plot_curves as pc
+from old_files import ensemble_WINNOW_testing as e
 
 
 def convert(heart_beats_x):
@@ -79,7 +78,7 @@ def summarisation(sample, max_window_size, n_runs, parallelise, num_workers):
     signal = pd.DataFrame(signal_norm, columns=record.sig_name, index=timestamp)
     e.summarise_data(heart_beats, labels, [])
     # all_scores = e.run(signal, max_window_size, n_runs, parallelise, num_workers)
-    all_scores = np.load("./output_scores_MITBIH/scores_final_unstandardised_123_0.npy")
+    all_scores = np.load("../output_scores_MITBIH/scores_final_unstandardised_123_0.npy")
     print(all_scores.shape)
     all_scores_beat = get_beat_score(all_scores, convert(heart_beats_x))
     # print("got scores")
