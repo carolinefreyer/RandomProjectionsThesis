@@ -2,6 +2,8 @@
 
 This code is used to test the Random Projection Outlier Ensemble introduced as part of my Master Thesis. The report can be found in `Thesis_Report_RPOE.pdf`.
 
+For a more straightforward explanation of the method and findings with visual aids, check out `The Random Projection Outlier Ensemble.pptx`.
+
 
 ## Usage example
 
